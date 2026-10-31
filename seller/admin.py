@@ -1,5 +1,5 @@
 from pathlib import Path
-import zipfile
+import zipfile, ast
 
 out = Path("/mnt/data/remote_control_postgres_update")
 out.mkdir(exist_ok=True)
@@ -500,8 +500,6 @@ if __name__ == "__main__":
 (out / "admin.py").write_text(admin, encoding="utf-8")
 (out / "requirements.txt").write_text("aiohttp>=3.9\npsycopg[binary]>=3.2\n", encoding="utf-8")
 
-# Syntax-check the generated Python modules before packaging.
-import ast
 ast.parse(licensedb)
 ast.parse(admin)
 
