@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 content = r'''# -*- coding: utf-8 -*-
