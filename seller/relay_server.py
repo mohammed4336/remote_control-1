@@ -625,7 +625,7 @@ async def seller_list(request):
                 )
             })
 
-       return web.json_response({"ok": True, "licenses": result})
+        return web.json_response({"ok": True, "licenses": result})
 
     except Exception as e:
         print("[SELLER] list error:", e, flush=True)
