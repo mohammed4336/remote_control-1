@@ -372,6 +372,4 @@ def set_contact(code, channel, contact):
             (channel, contact, code),
         )
 '''
-path = Path("/mnt/data/licensedb_postgres.py")
-path.write_text(code, encoding="utf-8")
-print(f"Created: {path} ({path.stat().st_size} bytes)")
+
