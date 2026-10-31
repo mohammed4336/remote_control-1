@@ -625,7 +625,7 @@ async def seller_list(request):
                 )
             })
 
-        return web.json_response({"ok": True, "accounts": result})
+       return web.json_response({"ok": True, "licenses": result})
 
     except Exception as e:
         print("[SELLER] list error:", e, flush=True)
@@ -731,10 +731,11 @@ def make_app():
     app.router.add_get("/control.html", index)
 
     for name in (
-        "manifest.json", "sw.js",
-        "icon-192.png", "icon-512.png",
-        "icon-512-maskable.png"
-    ):
+    "manifest.json", "sw.js",
+    "icon-192.png", "icon-512.png",
+    "icon-512-maskable.png",
+    "seller.css", "seller.js"
+):
         app.router.add_get("/" + name, asset)
 
     app.router.add_get("/health", health)
