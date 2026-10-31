@@ -126,7 +126,19 @@ async def issue_otp(st, channel, contact, code_for_limits=None):
 
 def check_otp(st, key, otp):
     """يتحقق من الرمز. يرجّع None لو صح أو سبب الرفض."""
-    if not st or not st.get("hash") or time.time() > st["exp"]:
+    now = time.time()
+print(
+    "[OTP DEBUG]",
+    "state_exists:", bool(st),
+    "hash_exists:", bool(st and st.get("hash")),
+    "now:", now,
+    "exp:", st.get("exp") if st else None,
+    "remaining:", (st["exp"] - now) if st else None,
+    flush=True
+)
+
+if not st or not st.get("hash") or now > st["exp"]:
+    return "otp_expired"
         return "otp_expired"
     st["attempts"] += 1
     if st["attempts"] > OTP_MAX_ATTEMPTS:
