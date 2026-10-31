@@ -1,18 +1,16 @@
-# -*- coding: utf-8 -*-
+from pathlib import Path
+
+content = r'''# -*- coding: utf-8 -*-
 """إرسال رمز التحقق (OTP) للمشتري — يستخدمه السيرفر الوسيط فقط.
 
-الإعداد بمتغيرات البيئة (على سيرفرك، مو عند المشتري):
+إعدادات البريد:
+  BREVO_API_KEY  مفتاح API من Brevo (مفضّل على Render المجاني)
+  SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM  (اختياري كبديل)
 
-  SMS (رقم الجوال):
-    SMS_PROVIDER=twilio     + TWILIO_SID, TWILIO_TOKEN, و (TWILIO_FROM أو TWILIO_MESSAGING_SID)
-    SMS_PROVIDER=webhook    + SMS_WEBHOOK_URL (و SMS_WEBHOOK_AUTH اختياري)
-                              يرسل POST JSON: {"to": "+966...", "message": "...", "otp": "123456"}
-                              (تربطه بأي مزوّد رسائل سعودي: Unifonic, Taqnyat, Msegat ...)
-    SMS_PROVIDER=console    (الافتراضي — للتجربة فقط: يطبع الرمز في شاشة السيرفر)
-
-  الإيميل:
-    SMTP_HOST, SMTP_PORT (587 أو 465), SMTP_USER, SMTP_PASS, SMTP_FROM
-    بدون SMTP_HOST يطبع الرمز في شاشة السيرفر (للتجربة فقط).
+إعدادات SMS:
+  SMS_PROVIDER=twilio + TWILIO_SID, TWILIO_TOKEN, و (TWILIO_FROM أو TWILIO_MESSAGING_SID)
+  SMS_PROVIDER=webhook + SMS_WEBHOOK_URL (و SMS_WEBHOOK_AUTH اختياري)
+  SMS_PROVIDER=console (الافتراضي — يطبع الرمز في سجل السيرفر)
 """
 
 import asyncio
@@ -29,12 +27,18 @@ def _env(name, default=""):
 
 def describe():
     sms = _env("SMS_PROVIDER", "console").lower()
-    email = "smtp" if _env("SMTP_HOST") else "console"
+    if _env("BREVO_API_KEY"):
+        email = "brevo_api"
+    elif _env("SMTP_HOST"):
+        email = "smtp"
+    else:
+        email = "console"
     return f"SMS={sms}  EMAIL={email}"
 
 
 def is_dev_mode():
-    return _env("SMS_PROVIDER", "console").lower() == "console" or not _env("SMTP_HOST")
+    # وضع التجربة للبريد فقط؛ وجود SMS_PROVIDER=console لا يعطّل إرسال البريد.
+    return not (_env("BREVO_API_KEY") or _env("SMTP_HOST"))
 
 
 def _message(otp):
@@ -57,7 +61,39 @@ async def send_otp(channel, contact, otp):
         await _send_sms(contact, text, otp)
 
 
-# ---------------------------------------------------------------- إيميل
+# ---------------------------------------------------------------- إيميل عبر Brevo API
+async def _brevo_send(to, text):
+    api_key = _env("BREVO_API_KEY")
+    sender = _env("SMTP_FROM")
+    if not api_key:
+        raise RuntimeError("BREVO_API_KEY غير مضبوط")
+    if not sender:
+        raise RuntimeError("SMTP_FROM غير مضبوط: أضف بريد المرسل الموثّق في Brevo")
+
+    payload = {
+        "sender": {"name": "Akira", "email": sender},
+        "to": [{"email": to}],
+        "subject": "رمز تفعيل لوحة التحكم عن بعد",
+        "textContent": text,
+    }
+    headers = {
+        "api-key": api_key,
+        "accept": "application/json",
+        "content-type": "application/json",
+    }
+    timeout = aiohttp.ClientTimeout(total=25)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(
+            "https://api.brevo.com/v3/smtp/email",
+            json=payload,
+            headers=headers,
+        ) as response:
+            if response.status >= 300:
+                details = (await response.text())[:500]
+                raise RuntimeError(f"Brevo API HTTP {response.status}: {details}")
+
+
+# ---------------------------------------------------------------- إيميل عبر SMTP (بديل)
 def _smtp_send(to, text):
     host = _env("SMTP_HOST")
     port = int(_env("SMTP_PORT", "587"))
@@ -68,24 +104,30 @@ def _smtp_send(to, text):
     msg["Subject"] = "رمز تفعيل لوحة التحكم عن بعد"
     msg.set_content(text)
     if port == 465:
-        with smtplib.SMTP_SSL(host, port, timeout=20) as s:
+        with smtplib.SMTP_SSL(host, port, timeout=20) as server:
             if user:
-                s.login(user, password)
-            s.send_message(msg)
+                server.login(user, password)
+            server.send_message(msg)
     else:
-        with smtplib.SMTP(host, port, timeout=20) as s:
-            s.starttls()
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            server.starttls()
             if user:
-                s.login(user, password)
-            s.send_message(msg)
+                server.login(user, password)
+            server.send_message(msg)
 
 
 async def _send_email(to, text):
-    if not _env("SMTP_HOST"):
-        _console("email", to, text)
+    # Brevo API أولاً؛ لا يستخدم SMTP عند وجود مفتاح API.
+    if _env("BREVO_API_KEY"):
+        await _brevo_send(to, text)
         return
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _smtp_send, to, text)
+
+    if _env("SMTP_HOST"):
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _smtp_send, to, text)
+        return
+
+    _console("email", to, text)
 
 
 # ---------------------------------------------------------------- SMS
@@ -108,10 +150,10 @@ async def _twilio(to, text):
         data["From"] = _env("TWILIO_FROM")
     url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
     timeout = aiohttp.ClientTimeout(total=20)
-    async with aiohttp.ClientSession(timeout=timeout) as s:
-        async with s.post(url, data=data, auth=aiohttp.BasicAuth(sid, token)) as r:
-            if r.status >= 300:
-                raise RuntimeError(f"Twilio HTTP {r.status}: {(await r.text())[:200]}")
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(url, data=data, auth=aiohttp.BasicAuth(sid, token)) as response:
+            if response.status >= 300:
+                raise RuntimeError(f"Twilio HTTP {response.status}: {(await response.text())[:200]}")
 
 
 async def _webhook(to, text, otp):
@@ -120,7 +162,16 @@ async def _webhook(to, text, otp):
     if _env("SMS_WEBHOOK_AUTH"):
         headers["Authorization"] = _env("SMS_WEBHOOK_AUTH")
     timeout = aiohttp.ClientTimeout(total=20)
-    async with aiohttp.ClientSession(timeout=timeout) as s:
-        async with s.post(url, json={"to": to, "message": text, "otp": otp}, headers=headers) as r:
-            if r.status >= 300:
-                raise RuntimeError(f"Webhook HTTP {r.status}: {(await r.text())[:200]}")
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(
+            url,
+            json={"to": to, "message": text, "otp": otp},
+            headers=headers,
+        ) as response:
+            if response.status >= 300:
+                raise RuntimeError(f"Webhook HTTP {response.status}: {(await response.text())[:200]}")
+'''
+
+path = Path("/mnt/data/otp.py")
+path.write_text(content, encoding="utf-8")
+print(f"تم إنشاء الملف: {path}")
