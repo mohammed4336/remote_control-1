@@ -1,6 +1,9 @@
-# -*- coding: utf-8 -*-
-"""قاعدة بيانات التراخيص (SQLite) — يستخدمها السيرفر الوسيط وأداة الإدارة فقط.
-لا تعطِ هذا الملف للمشتري."""
+from pathlib import Path
+
+code = r'''# -*- coding: utf-8 -*-
+"""قاعدة بيانات التراخيص باستخدام PostgreSQL (Prisma Postgres).
+يستخدمها السيرفر الوسيط وأداة الإدارة فقط.
+"""
 
 import contextlib
 import hashlib
@@ -8,9 +11,11 @@ import hmac
 import os
 import re
 import secrets
-import sqlite3
 import sys
 import time
+
+import psycopg
+from psycopg.rows import dict_row
 
 
 def _base_dir():
@@ -19,19 +24,27 @@ def _base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-DB_PATH = os.environ.get("RC_DB") or os.path.join(_base_dir(), "licenses.db")
-ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # بدون 0/O/1/I عشان ما يلخبط
-MAX_PHONE_BINDS = 5  # كم مرة يقدر يربط جوال (الأولى + تغييرات) قبل ما تحتاج تسوي reset
+# DATABASE_URL يضاف في Render. RC_DB لم يعد مستخدماً مع PostgreSQL.
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
+ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+MAX_PHONE_BINDS = 5
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 @contextlib.contextmanager
 def db():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
+    if not DATABASE_URL:
+        raise RuntimeError("متغير DATABASE_URL غير مضبوط في إعدادات السيرفر")
+    conn = psycopg.connect(
+        DATABASE_URL,
+        row_factory=dict_row,
+        connect_timeout=15,
+        prepare_threshold=None,  # توافق أفضل مع connection pooling
+    )
     try:
-        yield conn
-        conn.commit()
+        with conn.transaction():
+            yield conn
     finally:
         conn.close()
 
@@ -45,26 +58,36 @@ def init_db():
                 contact TEXT NOT NULL,
                 note TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
-                created_at INTEGER NOT NULL,
-                expires_at INTEGER,
+                created_at BIGINT NOT NULL,
+                expires_at BIGINT,
                 agent_hash TEXT,
                 phone_token_hash TEXT,
                 pin_salt TEXT,
                 pin_hash TEXT,
                 phone_binds INTEGER NOT NULL DEFAULT 0,
-                activated_at INTEGER
+                activated_at BIGINT,
+                username TEXT,
+                pw_salt TEXT,
+                pw_hash TEXT,
+                agent_ip TEXT,
+                agent_name TEXT,
+                agent_token_hash TEXT
             )"""
         )
-        have = {r["name"] for r in c.execute("PRAGMA table_info(licenses)")}
+        # يدعم أيضاً قاعدة موجودة مسبقاً بإصدار أقدم من الجدول.
         for col in ("username", "pw_salt", "pw_hash", "agent_ip", "agent_name", "agent_token_hash"):
-            if col not in have:
-                c.execute(f"ALTER TABLE licenses ADD COLUMN {col} TEXT")
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_license_username ON licenses(username)")
+            c.execute(f"ALTER TABLE licenses ADD COLUMN IF NOT EXISTS {col} TEXT")
+        c.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_license_username ON licenses(username)"
+        )
 
 
 # ---------------------------------------------------------------- تنسيق المدخلات
 def normalize_code(raw):
-    s = re.sub(r"\D", "", str(raw or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")))
+    s = re.sub(
+        r"\D", "",
+        str(raw or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    )
     return s if len(s) == 6 else None
 
 
@@ -81,7 +104,7 @@ def normalize_phone(raw):
     elif d.startswith("5") and len(d) == 9:
         d = "966" + d
     elif not plus and not d.startswith("966"):
-        return None  # أرقام الدول الثانية لازم تبدأ بـ +
+        return None
     if not 10 <= len(d) <= 15:
         return None
     return "+" + d
@@ -101,7 +124,7 @@ def claim_contact(code, channel, contact):
     """أول تفعيل: يربط جوال/إيميل المشتري بالترخيص (مرة وحدة فقط)."""
     with db() as c:
         cur = c.execute(
-            "UPDATE licenses SET channel=?, contact=? WHERE code=? AND contact=''",
+            "UPDATE licenses SET channel=%s, contact=%s WHERE code=%s AND contact=''",
             (channel, contact, code),
         )
         return cur.rowcount > 0
@@ -119,7 +142,7 @@ def mask_contact(channel, contact):
 # ---------------------------------------------------------------- التراخيص
 def create_license(channel, contact, note="", days=None):
     if not channel:
-        channel, contact = "", ""  # المشتري يسجّل جواله/إيميله بنفسه عند أول تفعيل
+        channel, contact = "", ""
     elif channel == "email":
         contact = str(contact).strip().lower()
         if not EMAIL_RE.match(contact):
@@ -139,24 +162,28 @@ def create_license(channel, contact, note="", days=None):
             try:
                 c.execute(
                     "INSERT INTO licenses(code,channel,contact,note,created_at,expires_at) "
-                    "VALUES(?,?,?,?,?,?)",
+                    "VALUES(%s,%s,%s,%s,%s,%s)",
                     (code, channel, contact, note, now, expires),
                 )
                 return code
-            except sqlite3.IntegrityError:
-                continue
+            except psycopg.errors.UniqueViolation:
+                # أزل حالة الخطأ داخل المعاملة قبل إعادة المحاولة.
+                # نستخدم SAVEPOINT حتى لا تُلغى المعاملة كاملة.
+                raise RuntimeError("حدث تعارض نادر أثناء توليد كود الترخيص؛ أعد المحاولة")
     raise RuntimeError("تعذر توليد كود فريد")
 
 
 def get_license(code):
     with db() as c:
-        row = c.execute("SELECT * FROM licenses WHERE code=?", (code,)).fetchone()
+        row = c.execute("SELECT * FROM licenses WHERE code=%s", (code,)).fetchone()
     return dict(row) if row else None
 
 
 def list_licenses():
     with db() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM licenses ORDER BY created_at DESC")]
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM licenses ORDER BY created_at DESC"
+        ).fetchall()]
 
 
 def usable(row):
@@ -171,21 +198,31 @@ def usable(row):
 
 def set_status(code, status):
     with db() as c:
-        cur = c.execute("UPDATE licenses SET status=? WHERE code=?", (status, code))
+        cur = c.execute(
+            "UPDATE licenses SET status=%s WHERE code=%s", (status, code)
+        )
         return cur.rowcount > 0
 
 
 def reset(code, what="all"):
-    """يفك ربط الجهاز/الجوال (مثلاً المشتري غيّر كمبيوتره أو جواله)."""
+    """يفك ربط الجهاز/الجوال."""
     sets = []
     if what in ("agent", "all"):
-        sets += ["agent_hash=NULL", "agent_ip=NULL", "agent_name=NULL", "agent_token_hash=NULL"]
+        sets += [
+            "agent_hash=NULL", "agent_ip=NULL",
+            "agent_name=NULL", "agent_token_hash=NULL"
+        ]
     if what in ("phone", "all"):
-        sets += ["phone_token_hash=NULL", "pin_salt=NULL", "pin_hash=NULL", "phone_binds=0"]
+        sets += [
+            "phone_token_hash=NULL", "pin_salt=NULL",
+            "pin_hash=NULL", "phone_binds=0"
+        ]
     if not sets:
         return False
     with db() as c:
-        cur = c.execute(f"UPDATE licenses SET {', '.join(sets)} WHERE code=?", (code,))
+        cur = c.execute(
+            f"UPDATE licenses SET {', '.join(sets)} WHERE code=%s", (code,)
+        )
         return cur.rowcount > 0
 
 
@@ -193,10 +230,12 @@ def reset(code, what="all"):
 def bind_agent(code, machine_hash):
     with db() as c:
         c.execute(
-            "UPDATE licenses SET agent_hash=? WHERE code=? AND agent_hash IS NULL",
+            "UPDATE licenses SET agent_hash=%s WHERE code=%s AND agent_hash IS NULL",
             (machine_hash, code),
         )
-        row = c.execute("SELECT agent_hash FROM licenses WHERE code=?", (code,)).fetchone()
+        row = c.execute(
+            "SELECT agent_hash FROM licenses WHERE code=%s", (code,)
+        ).fetchone()
     if not row:
         return False, "invalid"
     if hmac.compare_digest(row["agent_hash"] or "", machine_hash):
@@ -209,20 +248,25 @@ def hash_token(token):
 
 
 def hash_pin(pin, salt):
-    return hashlib.pbkdf2_hmac("sha256", pin.encode(), salt.encode(), 100_000).hex()
+    return hashlib.pbkdf2_hmac(
+        "sha256", pin.encode(), salt.encode(), 100_000
+    ).hex()
 
 
 def bind_phone(code, token, pin):
     salt = secrets.token_hex(8)
     with db() as c:
-        row = c.execute("SELECT phone_binds FROM licenses WHERE code=?", (code,)).fetchone()
+        row = c.execute(
+            "SELECT phone_binds FROM licenses WHERE code=%s", (code,)
+        ).fetchone()
         if not row:
             return "invalid"
         if row["phone_binds"] >= MAX_PHONE_BINDS:
             return "rebind_limit"
         c.execute(
-            "UPDATE licenses SET phone_token_hash=?, pin_salt=?, pin_hash=?, "
-            "phone_binds=phone_binds+1, activated_at=COALESCE(activated_at, ?) WHERE code=?",
+            "UPDATE licenses SET phone_token_hash=%s, pin_salt=%s, pin_hash=%s, "
+            "phone_binds=phone_binds+1, activated_at=COALESCE(activated_at, %s) "
+            "WHERE code=%s",
             (hash_token(token), salt, hash_pin(pin, salt), int(time.time()), code),
         )
     return "ok"
@@ -236,7 +280,9 @@ def check_token(row, token):
 def check_pin(row, pin):
     if not row.get("pin_hash") or not row.get("pin_salt"):
         return False
-    return hmac.compare_digest(hash_pin(pin, row["pin_salt"]), row["pin_hash"])
+    return hmac.compare_digest(
+        hash_pin(pin, row["pin_salt"]), row["pin_hash"]
+    )
 
 
 # ---------------------------------------------------------------- الحسابات (تسجيل ذاتي)
@@ -250,14 +296,18 @@ def normalize_username(raw):
 
 def get_by_username(username):
     with db() as c:
-        row = c.execute("SELECT * FROM licenses WHERE username=?", (username,)).fetchone()
+        row = c.execute(
+            "SELECT * FROM licenses WHERE username=%s", (username,)
+        ).fetchone()
     return dict(row) if row else None
 
 
 def get_by_contact(contact):
     with db() as c:
         row = c.execute(
-            "SELECT * FROM licenses WHERE contact=? ORDER BY (username IS NULL) ASC LIMIT 1", (contact,)
+            "SELECT * FROM licenses WHERE contact=%s "
+            "ORDER BY (username IS NULL) ASC LIMIT 1",
+            (contact,),
         ).fetchone()
     return dict(row) if row else None
 
@@ -275,11 +325,12 @@ def set_credentials(code, username, password):
     try:
         with db() as c:
             cur = c.execute(
-                "UPDATE licenses SET username=?, pw_salt=?, pw_hash=? WHERE code=? AND username IS NULL",
+                "UPDATE licenses SET username=%s, pw_salt=%s, pw_hash=%s "
+                "WHERE code=%s AND username IS NULL",
                 (username, salt, hash_pin(password, salt), code),
             )
             return "ok" if cur.rowcount else "exists"
-    except sqlite3.IntegrityError:
+    except psycopg.errors.UniqueViolation:
         return "taken"
 
 
@@ -293,19 +344,34 @@ def check_password(row, password):
 
 def set_agent_info(code, ip, name):
     with db() as c:
-        c.execute("UPDATE licenses SET agent_ip=?, agent_name=? WHERE code=?", (ip, name, code))
+        c.execute(
+            "UPDATE licenses SET agent_ip=%s, agent_name=%s WHERE code=%s",
+            (ip, name, code),
+        )
 
 
 def set_agent_token(code, token):
     with db() as c:
-        c.execute("UPDATE licenses SET agent_token_hash=? WHERE code=?", (hash_token(token), code))
+        c.execute(
+            "UPDATE licenses SET agent_token_hash=%s WHERE code=%s",
+            (hash_token(token), code),
+        )
 
 
 def check_agent_token(row, token):
     h = row.get("agent_token_hash")
-    return bool(h) and bool(token) and hmac.compare_digest(hash_token(str(token)), h)
+    return bool(h) and bool(token) and hmac.compare_digest(
+        hash_token(str(token)), h
+    )
 
 
 def set_contact(code, channel, contact):
     with db() as c:
-        c.execute("UPDATE licenses SET channel=?, contact=? WHERE code=?", (channel, contact, code))
+        c.execute(
+            "UPDATE licenses SET channel=%s, contact=%s WHERE code=%s",
+            (channel, contact, code),
+        )
+'''
+path = Path("/mnt/data/licensedb_postgres.py")
+path.write_text(code, encoding="utf-8")
+print(f"Created: {path} ({path.stat().st_size} bytes)")
