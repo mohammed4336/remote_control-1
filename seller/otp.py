@@ -173,5 +173,4 @@ async def _webhook(to, text, otp):
 '''
 
 path = Path("/mnt/data/otp.py")
-path.write_text(content, encoding="utf-8")
 print(f"تم إنشاء الملف: {path}")
