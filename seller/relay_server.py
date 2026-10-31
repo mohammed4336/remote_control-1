@@ -127,25 +127,29 @@ async def issue_otp(st, channel, contact, code_for_limits=None):
 def check_otp(st, key, otp):
     """يتحقق من الرمز. يرجّع None لو صح أو سبب الرفض."""
     now = time.time()
-print(
-    "[OTP DEBUG]",
-    "state_exists:", bool(st),
-    "hash_exists:", bool(st and st.get("hash")),
-    "now:", now,
-    "exp:", st.get("exp") if st else None,
-    "remaining:", (st["exp"] - now) if st else None,
-    flush=True
-)
 
-if not st or not st.get("hash") or now > st["exp"]:
-    return "otp_expired"
+    print(
+        "[OTP DEBUG]",
+        "state_exists:", bool(st),
+        "hash_exists:", bool(st and st.get("hash")),
+        "now:", now,
+        "exp:", st.get("exp") if st else None,
+        "remaining:", (st["exp"] - now) if st else None,
+        flush=True
+    )
+
+    if not st or not st.get("hash") or now > st["exp"]:
         return "otp_expired"
+
     st["attempts"] += 1
+
     if st["attempts"] > OTP_MAX_ATTEMPTS:
         st["hash"] = None
         return "too_many_attempts"
+
     if not hmac.compare_digest(_h(key + str(otp)), st["hash"]):
         return "wrong_otp"
+
     return None
 
 
