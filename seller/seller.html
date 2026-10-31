@@ -1,108 +1,52 @@
+
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0a0d13">
-  <title>لوحة البائع | Remote Control</title>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/seller.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>لوحة البائع</title>
+<link rel="stylesheet" href="/seller.css">
 </head>
 <body>
-  <div class="ambient ambient-one"></div>
-  <div class="ambient ambient-two"></div>
+<main class="container">
+  <header>
+    <div>
+      <h1>لوحة إدارة الاشتراكات</h1>
+      <p>إدارة حسابات العملاء والتراخيص</p>
+    </div>
+    <button id="refreshBtn">تحديث القائمة</button>
+  </header>
 
-  <main class="shell">
-    <header class="topbar">
-      <div class="brand">
-        <div class="brand-icon">RC</div>
-        <div>
-          <h1>Remote Control</h1>
-          <p>لوحة إدارة الاشتراكات</p>
-        </div>
-      </div>
-      <div class="top-actions">
-        <span class="live"><i></i> لوحة الإدارة</span>
-        <button class="refresh-btn" id="refreshBtn">↻ تحديث</button>
-      </div>
-    </header>
+  <section class="stats">
+    <div>إجمالي الحسابات<strong id="totalCount">0</strong></div>
+    <div>الاشتراكات الفعالة<strong id="activeCount">0</strong></div>
+    <div>بانتظار التفعيل<strong id="pendingCount">0</strong></div>
+    <div>الموقوفة والمنتهية<strong id="inactiveCount">0</strong></div>
+  </section>
 
-    <section class="welcome">
-      <div>
-        <span class="eyebrow">SELLER DASHBOARD</span>
-        <h2>مرحباً بك في لوحة البائع</h2>
-        <p>إدارة حسابات العملاء والاشتراكات من مكان واحد.</p>
-      </div>
-      <div class="welcome-mark">✦</div>
-    </section>
-
-    <section class="stats">
-      <article class="stat-card">
-        <span class="stat-icon">♙</span>
-        <span class="stat-label">إجمالي العملاء</span>
-        <strong id="totalCount">—</strong>
-        <small>جميع الحسابات</small>
-      </article>
-      <article class="stat-card active-card">
-        <span class="stat-icon">✓</span>
-        <span class="stat-label">اشتراكات نشطة</span>
-        <strong id="activeCount">—</strong>
-        <small>حسابات مفعّلة</small>
-      </article>
-      <article class="stat-card pending-card">
-        <span class="stat-icon">◷</span>
-        <span class="stat-label">بانتظار التفعيل</span>
-        <strong id="pendingCount">—</strong>
-        <small>حسابات معلّقة</small>
-      </article>
-      <article class="stat-card inactive-card">
-        <span class="stat-icon">⊘</span>
-        <span class="stat-label">غير نشطة</span>
-        <strong id="inactiveCount">—</strong>
-        <small>منتهية أو موقوفة</small>
-      </article>
-    </section>
-
-    <section class="panel">
-      <div class="panel-heading">
-        <div>
-          <span class="eyebrow">CUSTOMERS</span>
-          <h3>إدارة العملاء</h3>
-          <p>عرض الحسابات والتحكم في اشتراكاتها.</p>
-        </div>
-        <div class="panel-tools">
-          <input id="searchInput" type="search" placeholder="ابحث عن عميل أو كود...">
-        </div>
-      </div>
-
-      <div id="notice" class="notice" hidden></div>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>العميل</th>
-              <th>كود الترخيص</th>
-              <th>الحالة</th>
-              <th>تاريخ الانتهاء</th>
-              <th>الاتصال</th>
-              <th>الإجراءات</th>
-            </tr>
-          </thead>
-          <tbody id="licensesBody">
-            <tr><td colspan="6" class="empty">جارٍ تحميل الحسابات...</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="panel-footer">
-        <span id="resultCount">جاري تحميل البيانات...</span>
-        <span class="secure-label">● اتصال آمن</span>
-      </div>
-    </section>
-
-    <footer>Remote Control <span>•</span> Seller Management</footer>
-  </main>
-
-  <script src="/seller.js"></script>
+  <section class="panel">
+    <h2>حسابات العملاء</h2>
+    <input id="searchInput" placeholder="ابحث عن حساب...">
+    <p id="notice"></p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>الكود</th>
+            <th>اسم المستخدم</th>
+            <th>التواصل</th>
+            <th>الحالة</th>
+            <th>الانتهاء</th>
+            <th>الإجراءات</th>
+          </tr>
+        </thead>
+        <tbody id="licensesBody">
+          <tr><td colspan="6">جارٍ التحميل...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script src="/seller.js"></script>
 </body>
 </html>
