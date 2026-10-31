@@ -1,6 +1,4 @@
-from pathlib import Path
-
-code = r'''# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """قاعدة بيانات التراخيص باستخدام PostgreSQL (Prisma Postgres).
 يستخدمها السيرفر الوسيط وأداة الإدارة فقط.
 """
@@ -371,5 +369,3 @@ def set_contact(code, channel, contact):
             "UPDATE licenses SET channel=%s, contact=%s WHERE code=%s",
             (channel, contact, code),
         )
-'''
-
