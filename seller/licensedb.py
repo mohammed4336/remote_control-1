@@ -319,15 +319,20 @@ def find(ident):
 
 
 def set_credentials(code, username, password):
-    salt = secrets.token_hex(8)
+    salt = secrets.token_hex(16)
+    password = str(password)
+
+    pw_hash = hash_pin(password, salt)
+
     try:
         with db() as c:
             cur = c.execute(
                 "UPDATE licenses SET username=%s, pw_salt=%s, pw_hash=%s "
                 "WHERE code=%s AND username IS NULL",
-                (username, salt, hash_pin(password, salt), code),
+                (username, salt, pw_hash, code),
             )
             return "ok" if cur.rowcount else "exists"
+
     except psycopg.errors.UniqueViolation:
         return "taken"
 
