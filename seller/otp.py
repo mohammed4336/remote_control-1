@@ -181,3 +181,7 @@ def describe():
     )
     sms = os.getenv("SMS_PROVIDER", "console")
     return f"SMS={sms} EMAIL={email}"
+def is_dev_mode():
+    return not (
+        os.getenv("BREVO_API_KEY") or os.getenv("SMTP_HOST")
+    )
