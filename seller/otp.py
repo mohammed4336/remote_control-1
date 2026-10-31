@@ -174,3 +174,9 @@ async def _webhook(to, text, otp):
 
 path = Path("/mnt/data/otp.py")
 print(f"تم إنشاء الملف: {path}")
+def describe():
+    email = "brevo_api" if os.getenv("BREVO_API_KEY") else (
+        "smtp" if os.getenv("SMTP_HOST") else "console"
+    )
+    sms = os.getenv("SMS_PROVIDER", "console")
+    return f"SMS={sms} EMAIL={email}"
