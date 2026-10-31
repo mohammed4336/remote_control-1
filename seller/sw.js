@@ -17,7 +17,11 @@ self.addEventListener("activate", (e) => {
 // اتصال WebSocket ما يمر من هنا أبدًا (مو GET عادي)
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== "GET" || url.origin !== location.origin) return;
+ if (
+  e.request.method !== "GET" ||
+  url.origin !== location.origin ||
+  url.pathname.startsWith("/seller")
+) return;
 
   e.respondWith(
     caches.open(CACHE).then(async (cache) => {
