@@ -1,0 +1,52 @@
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>لوحة البائع</title>
+<link rel="stylesheet" href="/seller.css">
+</head>
+<body>
+<main class="container">
+  <header>
+    <div>
+      <h1>لوحة إدارة الاشتراكات</h1>
+      <p>إدارة حسابات العملاء والتراخيص</p>
+    </div>
+    <button id="refreshBtn">تحديث القائمة</button>
+  </header>
+
+  <section class="stats">
+    <div>إجمالي الحسابات<strong id="totalCount">0</strong></div>
+    <div>الاشتراكات الفعالة<strong id="activeCount">0</strong></div>
+    <div>بانتظار التفعيل<strong id="pendingCount">0</strong></div>
+    <div>الموقوفة والمنتهية<strong id="inactiveCount">0</strong></div>
+  </section>
+
+  <section class="panel">
+    <h2>حسابات العملاء</h2>
+    <input id="searchInput" placeholder="ابحث عن حساب...">
+    <p id="notice"></p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>الكود</th>
+            <th>اسم المستخدم</th>
+            <th>التواصل</th>
+            <th>الحالة</th>
+            <th>الانتهاء</th>
+            <th>الإجراءات</th>
+          </tr>
+        </thead>
+        <tbody id="licensesBody">
+          <tr><td colspan="6">جارٍ التحميل...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script src="/seller.js"></script>
+</body>
+</html>
