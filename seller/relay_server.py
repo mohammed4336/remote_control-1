@@ -547,16 +547,199 @@ async def admin_run(request):
     out, _ = await asyncio.wait_for(proc.communicate(), 20)
     return web.json_response({"ok": proc.returncode == 0, "output": out.decode("utf-8", "replace")})
 
+# ---------------------------------------------------------------- لوحة البائع الخاصة
 
+SELLER_USERNAME = os.environ.get("SELLER_USERNAME", "").strip()
+SELLER_PASSWORD = os.environ.get("SELLER_PASSWORD", "").strip()
+
+
+def seller_authorized(request):
+    if len(SELLER_PASSWORD) < 16 or not SELLER_USERNAME:
+        return False
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return False
+
+    import base64
+    try:
+        decoded = base64.b64decode(auth[6:]).decode("utf-8")
+        username, password = decoded.split(":", 1)
+    except Exception:
+        return False
+
+    return (
+        hmac.compare_digest(username, SELLER_USERNAME)
+        and hmac.compare_digest(password, SELLER_PASSWORD)
+    )
+
+
+def seller_auth_required(request):
+    if not seller_authorized(request):
+        raise web.HTTPUnauthorized(
+            headers={"WWW-Authenticate": 'Basic realm="Seller Panel"'}
+        )
+
+
+def seller_check_origin(request):
+    origin = request.headers.get("Origin", "")
+    if not origin or origin.split("://", 1)[-1].rstrip("/") != request.host:
+        raise web.HTTPForbidden(text="Invalid origin")
+
+
+def seller_status(row):
+    ok, reason = ldb.usable(row)
+    if ok:
+        return "active"
+    return reason or "inactive"
+
+
+async def seller_page(request):
+    seller_auth_required(request)
+    return web.FileResponse(
+        os.path.join(BASE_DIR, "seller.html"),
+        headers={"Cache-Control": "no-store"}
+    )
+
+
+async def seller_list(request):
+    seller_auth_required(request)
+
+    try:
+        rows = ldb.list_licenses()
+        result = []
+
+        for r in rows:
+            result.append({
+                "code": r["code"],
+                "username": r.get("username") or "بدون اسم",
+                "status": seller_status(r),
+                "contact": ldb.mask_contact(
+                    r.get("channel", ""),
+                    r.get("contact", "")
+                ),
+                "created_at": r.get("created_at"),
+                "expires_at": r.get("expires_at"),
+                "agent_online": bool(
+                    rooms.get(r["code"], {}).get("agent")
+                )
+            })
+
+        return web.json_response({"ok": True, "accounts": result})
+
+    except Exception as e:
+        print("[SELLER] list error:", e, flush=True)
+        return web.json_response(
+            {"ok": False, "error": "database_error"},
+            status=500
+        )
+
+
+async def seller_activate(request):
+    seller_auth_required(request)
+    seller_check_origin(request)
+
+    code = ldb.normalize_code(request.match_info["code"])
+    if not code:
+        return web.json_response({"ok": False, "error": "bad_code"}, status=400)
+
+    row = ldb.get_license(code)
+    if not row:
+        return web.json_response({"ok": False, "error": "not_found"}, status=404)
+
+    try:
+        data = await request.json()
+        days = int(data.get("days", 30))
+        if not 1 <= days <= 3650:
+            raise ValueError
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid_days"}, status=400)
+
+    expires = int(time.time()) + days * 86400
+
+    with ldb.db() as c:
+        c.execute(
+            "UPDATE licenses SET status='active', expires_at=%s WHERE code=%s",
+            (expires, code)
+        )
+
+    return web.json_response({"ok": True, "expires_at": expires})
+
+
+async def seller_revoke(request):
+    seller_auth_required(request)
+    seller_check_origin(request)
+
+    code = ldb.normalize_code(request.match_info["code"])
+    if not code:
+        return web.json_response({"ok": False, "error": "bad_code"}, status=400)
+
+    if not ldb.get_license(code):
+        return web.json_response({"ok": False, "error": "not_found"}, status=404)
+
+    ldb.set_status(code, "revoked")
+
+    return web.json_response({"ok": True})
+
+
+async def seller_extend(request):
+    seller_auth_required(request)
+    seller_check_origin(request)
+
+    code = ldb.normalize_code(request.match_info["code"])
+    if not code:
+        return web.json_response({"ok": False, "error": "bad_code"}, status=400)
+
+    row = ldb.get_license(code)
+    if not row:
+        return web.json_response({"ok": False, "error": "not_found"}, status=404)
+
+    try:
+        data = await request.json()
+        days = int(data.get("days", 30))
+        if not 1 <= days <= 3650:
+            raise ValueError
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid_days"}, status=400)
+
+    base = max(int(time.time()), row.get("expires_at") or 0)
+    expires = base + days * 86400
+
+    with ldb.db() as c:
+        c.execute(
+            "UPDATE licenses SET expires_at=%s, status='active' WHERE code=%s",
+            (expires, code)
+        )
+
+    return web.json_response({"ok": True, "expires_at": expires})
 def make_app():
     app = web.Application()
+
+    # إدارة التراخيص القديمة
     app.router.add_post("/admin/run", admin_run)
+
+    # لوحة البائع
+    app.router.add_get("/seller", seller_page)
+    app.router.add_get("/seller/", seller_page)
+    app.router.add_get("/seller/api/licenses", seller_list)
+    app.router.add_post("/seller/api/licenses/{code}/activate", seller_activate)
+    app.router.add_post("/seller/api/licenses/{code}/revoke", seller_revoke)
+    app.router.add_post("/seller/api/licenses/{code}/extend", seller_extend)
+
+    # واجهة العميل
     app.router.add_get("/", index)
     app.router.add_get("/control.html", index)
-    for name in ("manifest.json", "sw.js", "icon-192.png", "icon-512.png", "icon-512-maskable.png"):
+
+    for name in (
+        "manifest.json", "sw.js",
+        "icon-192.png", "icon-512.png",
+        "icon-512-maskable.png"
+    ):
         app.router.add_get("/" + name, asset)
+
     app.router.add_get("/health", health)
     app.router.add_get("/ws", ws_handler)
+
     app.cleanup_ctx.append(background)
     return app
 
