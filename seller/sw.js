@@ -1,37 +1,44 @@
-const CACHE = "remote-control-v2";
+const CACHE = "remote-control-v3";
 
-self.addEventListener("install", () => {
-  self.skipWaiting();
+self.addEventListener("install", (e) => {
+  e.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    )
+      Promise.all(
+        keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))
+      )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// كاش ديناميكي: يخزن أي صفحة/ملف يفتح بنجاح، ويرجع له لو النت انقطع
-// اتصال WebSocket ما يمر من هنا أبدًا (مو GET عادي)
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
- if (
-  e.request.method !== "GET" ||
-  url.origin !== location.origin ||
-  url.pathname.startsWith("/seller")
-) return;
+
+  if (
+    e.request.method !== "GET" ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith("/seller")
+  ) {
+    return;
+  }
 
   e.respondWith(
     caches.open(CACHE).then(async (cache) => {
       try {
-        const fresh = await fetch(e.request);
-        if (fresh && fresh.ok) cache.put(e.request, fresh.clone());
-        return fresh;
-      } catch (err) {
+        const response = await fetch(e.request);
+
+        if (response && response.ok) {
+          await cache.put(e.request, response.clone());
+        }
+
+        return response;
+      } catch (error) {
         const cached = await cache.match(e.request);
-        return cached || Promise.reject(err);
+        if (cached) return cached;
+        throw error;
       }
     })
   );
