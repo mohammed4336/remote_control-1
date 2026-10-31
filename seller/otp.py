@@ -1,7 +1,4 @@
-import os
-from pathlib import Path
-
-content = r'''# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """إرسال رمز التحقق (OTP) للمشتري — يستخدمه السيرفر الوسيط فقط.
 
 إعدادات البريد:
@@ -171,17 +168,6 @@ async def _webhook(to, text, otp):
         ) as response:
             if response.status >= 300:
                 raise RuntimeError(f"Webhook HTTP {response.status}: {(await response.text())[:200]}")
-'''
 
-path = Path("/mnt/data/otp.py")
-print(f"تم إنشاء الملف: {path}")
-def describe():
-    email = "brevo_api" if os.getenv("BREVO_API_KEY") else (
-        "smtp" if os.getenv("SMTP_HOST") else "console"
-    )
-    sms = os.getenv("SMS_PROVIDER", "console")
-    return f"SMS={sms} EMAIL={email}"
-def is_dev_mode():
-    return not (
-        os.getenv("BREVO_API_KEY") or os.getenv("SMTP_HOST")
-    )
+
+
