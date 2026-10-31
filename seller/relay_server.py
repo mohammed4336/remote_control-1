@@ -244,6 +244,13 @@ async def on_login(ws, ip, msg):
     if over("fail", ip, 15, 600):
         return await fail(ws, "login_result", "rate_limited")
     row = ldb.get_by_username(ldb.normalize_username(msg.get("username")) or "")
+    username_input = str(msg.get("username", ""))
+normalized = ldb.normalize_username(username_input)
+
+print("[LOGIN DEBUG] username_valid:", bool(normalized), flush=True)
+print("[LOGIN DEBUG] account_found:", bool(row), flush=True)
+print("[LOGIN DEBUG] password_hash_exists:",
+      bool(row and row.get("pw_hash")), flush=True)
     code = row and row["code"]
     if code and locked(code):
         return await fail(ws, "login_result", "locked")
