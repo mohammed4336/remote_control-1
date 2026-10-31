@@ -253,6 +253,8 @@ async def on_login(ws, ip, msg):
     print("[LOGIN DEBUG] account_found:", bool(row), flush=True)
     print("[LOGIN DEBUG] password_hash_exists:",
           bool(row and row.get("pw_hash")), flush=True)
+    print("[LOGIN DEBUG] password_matches:",
+      ldb.check_password(row, msg.get("password", "")), flush=True)
 
     code = row and row["code"]
 
