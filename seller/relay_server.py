@@ -554,10 +554,19 @@ SELLER_PASSWORD = os.environ.get("SELLER_PASSWORD", "").strip()
 
 
 def seller_authorized(request):
+    auth = request.headers.get("Authorization", "")
+
+    print(
+        "[SELLER DEBUG]",
+        "username_configured:", bool(SELLER_USERNAME),
+        "password_configured:", len(SELLER_PASSWORD) >= 16,
+        "authorization_received:", auth.startswith("Basic "),
+        flush=True
+    )
+
     if len(SELLER_PASSWORD) < 16 or not SELLER_USERNAME:
         return False
 
-    auth = request.headers.get("Authorization", "")
     if not auth.startswith("Basic "):
         return False
 
@@ -568,10 +577,17 @@ def seller_authorized(request):
     except Exception:
         return False
 
-    return (
-        hmac.compare_digest(username, SELLER_USERNAME)
-        and hmac.compare_digest(password, SELLER_PASSWORD)
+    user_ok = hmac.compare_digest(username, SELLER_USERNAME)
+    pass_ok = hmac.compare_digest(password, SELLER_PASSWORD)
+
+    print(
+        "[SELLER DEBUG]",
+        "username_match:", user_ok,
+        "password_match:", pass_ok,
+        flush=True
     )
+
+    return user_ok and pass_ok
 
 
 def seller_auth_required(request):
