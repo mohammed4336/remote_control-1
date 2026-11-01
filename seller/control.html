@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>لوحة التحكم</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a0d13">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="تحكم بعيد">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0d13;
+    --bg2:#0f1420;
+    --panel:rgba(255,255,255,.045);
+    --panel-b:rgba(255,255,255,.09);
+    --teal:#57f0c9;
+    --violet:#8b7fff;
+    --danger:#ff5c6c;
+    --text:#eaeef4;
+    --muted:#8a93a6;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    font-family:'Tajawal',sans-serif;
+    color:var(--text);
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(87,240,201,.10), transparent 60%),
+      radial-gradient(1000px 700px at 110% 10%, rgba(139,127,255,.12), transparent 55%),
+      var(--bg);
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    position:fixed;
+    inset:0;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .glass{
+    background:var(--panel);
+    border:1px solid var(--panel-b);
+    backdrop-filter:blur(18px);
+    -webkit-backdrop-filter:blur(18px);
+  }
+
+  /* ---------- شاشة الاتصال ---------- */
+  #connectScreen{
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:22px; padding:28px; text-align:center;
+  }
+  .logo-ring{
+    width:92px;height:92px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 30% 30%, rgba(87,240,201,.25), rgba(139,127,255,.15) 60%, transparent 70%);
+    position:relative;
+  }
+  .logo-ring::before,.logo-ring::after{
+    content:"";position:absolute;inset:0;border-radius:50%;
+    border:1px solid rgba(87,240,201,.35);
+    animation:pulseRing 2.6s ease-out infinite;
+  }
+  .logo-ring::after{animation-delay:1.3s;}
+  @keyframes pulseRing{
+    0%{transform:scale(.7);opacity:.9;}
+    100%{transform:scale(1.9);opacity:0;}
+  }
+  .logo-dot{width:14px;height:14px;border-radius:50%;background:var(--teal);box-shadow:0 0 18px 4px rgba(87,240,201,.7);}
+  h1{font-weight:900;font-size:22px;margin:0;}
+  p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
+
+  .field{
+    width:100%;max-width:320px;text-align:right;
+    border-radius:16px;padding:14px 16px;font-size:15px;color:var(--text);
+    font-family:'Tajawal',sans-serif;font-weight:500;
+  }
+  .field input{
+    width:100%;background:transparent;border:none;outline:none;color:var(--text);
+    font-family:'Tajawal',sans-serif;font-size:15px;letter-spacing:1px;
+    text-align:center;
+  }
+  .field label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:6px;}
+  .form-stack{width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px;}
+
+  .btn{
+    border:none;border-radius:16px;padding:15px 20px;font-family:'Tajawal',sans-serif;
+    font-weight:700;font-size:15.5px;cursor:pointer;color:#06110e;
+    background:linear-gradient(135deg,var(--teal),#3fd1b0);
+    box-shadow:0 8px 24px -8px rgba(87,240,201,.55);
+    position:relative;overflow:hidden;transition:transform .12s ease;
+  }
+  .btn:active{transform:scale(.97);}
+  .btn.ghost{
+    background:transparent;color:var(--text);border:1px solid var(--panel-b);
+    box-shadow:none;
+  }
+  .error-msg{color:var(--danger);font-size:13px;min-height:16px;}
+  .step{display:none;flex-direction:column;gap:12px;}
+  .step.show{display:flex;}
+  .btn[disabled]{opacity:.55;pointer-events:none;}
+
+  /* ---------- شاشة التحكم ---------- */
+  #controlScreen{flex:1;display:none;flex-direction:column;padding:14px;gap:12px;min-height:0;}
+
+  .statusbar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:10px 14px;border-radius:16px;flex:0 0 auto;
+  }
+  .status-left{display:flex;align-items:center;gap:9px;}
+  .status-dot{width:9px;height:9px;border-radius:50%;background:var(--teal);box-shadow:0 0 10px 2px rgba(87,240,201,.8);animation:blink 1.8s ease-in-out infinite;}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.35;}}
+  .status-title{font-size:13.5px;font-weight:700;}
+  .status-sub{font-size:11px;color:var(--muted);}
+  .icon-btn{
+    width:34px;height:34px;border-radius:12px;border:1px solid var(--panel-b);
+    background:rgba(255,255,255,.03);display:flex;align-items:center;justify-content:center;
+    font-size:16px;
+  }
+
+  /* التاتش باد */
+  #touchpad{
+    flex:1;border-radius:26px;position:relative;overflow:hidden;
+    background:
+      radial-gradient(560px 300px at var(--px,50%) var(--py,50%), rgba(87,240,201,.10), transparent 60%),
+      linear-gradient(160deg, rgba(255,255,255,.05), rgba(255,255,255,.015));
+    border:1px solid var(--panel-b);
+    min-height:0;
+  }
+  #touchpad::before{
+    content:"";position:absolute;inset:0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px);
+    background-size:26px 26px;
+    mask-image:radial-gradient(circle at var(--px,50%) var(--py,50%), black, transparent 65%);
+    -webkit-mask-image:radial-gradient(circle at var(--px,50%) var(--py,50%), black, transparent 65%);
+    opacity:.55;
+  }
+  .pad-hint{
+    position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:6px;color:var(--muted);font-size:12.5px;pointer-events:none;opacity:.7;z-index:2;
+    transition:opacity .3s ease;
+  }
+  .pad-hint b{color:var(--text);font-size:13.5px;}
+  .pad-screen-img{
+    position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+    background:#000;z-index:0;display:none;
+  }
+  .pad-live-badge{
+    position:absolute;top:10px;left:10px;z-index:3;
+    display:none;align-items:center;gap:6px;
+    background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+    border-radius:20px;padding:5px 10px;font-size:11px;font-weight:700;color:var(--text);
+  }
+  .pad-live-badge .dot{width:7px;height:7px;border-radius:50%;background:var(--danger);animation:blink 1.4s ease-in-out infinite;}
+  .ripple{
+    position:absolute;width:16px;height:16px;border-radius:50%;
+    background:radial-gradient(circle, rgba(87,240,201,.65), transparent 70%);
+    transform:translate(-50%,-50%) scale(0);pointer-events:none;z-index:2;
+    animation:rippleAnim .5s ease-out forwards;
+  }
+  @keyframes rippleAnim{to{transform:translate(-50%,-50%) scale(5);opacity:0;}}
+
+  .click-row{display:flex;gap:10px;flex:0 0 auto;}
+  .click-btn{
+    flex:1;border-radius:18px;padding:15px 0;text-align:center;font-weight:700;font-size:14.5px;
+    border:1px solid var(--panel-b);background:rgba(255,255,255,.035);color:var(--text);
+    position:relative;overflow:hidden;
+  }
+  .click-btn:active{background:rgba(87,240,201,.14);border-color:rgba(87,240,201,.4);}
+
+  /* الدوك السفلي */
+  .dock{
+    flex:0 0 auto;border-radius:20px;padding:10px 8px;
+    display:grid;grid-template-columns:repeat(7,1fr);gap:6px;
+  }
+  .dock-btn{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+    padding:9px 2px;border-radius:14px;background:transparent;border:none;color:var(--text);
+  }
+  .dock-btn:active{background:rgba(255,255,255,.06);}
+  .dock-btn .ic{font-size:18px;}
+  .dock-btn .lb{font-size:9.5px;color:var(--muted);}
+
+  /* شيت لوحة المفاتيح */
+  .sheet-overlay{
+    position:fixed;inset:0;background:rgba(4,6,10,.6);backdrop-filter:blur(4px);
+    display:none;align-items:flex-end;justify-content:center;z-index:40;
+  }
+  .sheet{
+    width:100%;max-width:480px;border-radius:22px 22px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));
+    display:flex;flex-direction:column;gap:12px;
+    transform:translateY(100%);transition:transform .28s cubic-bezier(.2,.9,.25,1);
+  }
+  .sheet-overlay.show{display:flex;}
+  .sheet-overlay.show .sheet{transform:translateY(0);}
+  .sheet-handle{width:38px;height:4px;border-radius:3px;background:var(--panel-b);margin:0 auto;}
+  .kb-row{display:flex;gap:8px;}
+  .kb-input{
+    flex:1;border-radius:14px;padding:12px 14px;background:rgba(255,255,255,.04);
+    border:1px solid var(--panel-b);color:var(--text);font-family:'Tajawal',sans-serif;font-size:15px;
+    outline:none;text-align:right;
+  }
+  .kb-send{width:52px;border-radius:14px;background:linear-gradient(135deg,var(--teal),#3fd1b0);border:none;font-size:18px;color:#06110e;}
+  .kb-specials{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+  .kb-key{
+    border-radius:12px;padding:12px 4px;font-size:12.5px;font-weight:700;
+    background:rgba(255,255,255,.035);border:1px solid var(--panel-b);color:var(--text);
+  }
+  .kb-key:active{background:rgba(139,127,255,.18);}
+
+  /* قائمة الطاقة */
+  .power-menu{display:flex;flex-direction:column;gap:10px;}
+  .power-item{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    border-radius:16px;padding:14px 16px;background:rgba(255,255,255,.03);
+    border:1px solid var(--panel-b);
+  }
+  .power-item .lbl{display:flex;align-items:center;gap:10px;font-weight:700;font-size:14px;}
+  .hold-btn{
+    position:relative;width:56px;height:56px;border-radius:50%;
+    background:rgba(255,255,255,.04);border:1px solid var(--panel-b);
+    display:flex;align-items:center;justify-content:center;font-size:18px;
+  }
+  .hold-btn svg{position:absolute;inset:0;transform:rotate(-90deg);}
+  .hold-btn circle{fill:none;stroke-width:3;}
+  .hold-btn .bg{stroke:rgba(255,255,255,.08);}
+  .hold-btn .fg{stroke:var(--danger);stroke-dasharray:150.8;stroke-dashoffset:150.8;}
+  .hold-btn.filling .fg{transition:stroke-dashoffset 1.1s linear;stroke-dashoffset:0;}
+  .toast{
+    position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+    padding:10px 18px;border-radius:14px;font-size:13px;font-weight:700;
+    background:rgba(20,24,34,.92);border:1px solid var(--panel-b);z-index:60;
+    opacity:0;pointer-events:none;transition:opacity .25s ease, transform .25s ease;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-6px);}
+
+  /* عرض الشاشة */
+  .screen-overlay{
+    position:fixed;inset:0;background:#000;z-index:50;
+    display:none;flex-direction:column;
+  }
+  .screen-overlay.show{display:flex;}
+  .screen-top{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:12px 14px;flex:0 0 auto;
+    background:linear-gradient(180deg, rgba(0,0,0,.6), transparent);
+    position:absolute;top:0;left:0;right:0;z-index:2;
+  }
+  .screen-body{flex:1;display:flex;align-items:center;justify-content:center;position:relative;}
+  .screen-body img{max-width:100%;max-height:100%;object-fit:contain;}
+  .screen-loading{
+    position:absolute;color:var(--muted);font-size:13px;display:flex;flex-direction:column;
+    align-items:center;gap:10px;
+  }
+  .spinner{
+    width:26px;height:26px;border-radius:50%;border:3px solid rgba(255,255,255,.15);
+    border-top-color:var(--teal);animation:spin 0.8s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+
+<!-- شاشة الاتصال -->
+<div id="connectScreen">
+  <div class="logo-ring"><div class="logo-dot"></div></div>
+  <button class="btn ghost" id="installBtn" style="display:none;">📲 ثبّت التطبيق على جوالك</button>
+  <div>
+    <h1>لوحة التحكم عن بعد</h1>
+    <p class="sub" id="cSub"></p>
+  </div>
+  <div class="form-stack">
+    <!-- دخول -->
+    <div class="step" id="stepLogin">
+      <div class="field glass">
+        <label>اسم المستخدم</label>
+        <input id="loginUser" type="text" dir="ltr" autocomplete="username" autocapitalize="none" spellcheck="false" style="text-align:center">
+      </div>
+      <div class="field glass">
+        <label>كلمة المرور</label>
+        <input id="loginPass" type="password" dir="ltr" autocomplete="current-password" style="text-align:center">
+      </div>
+      <button class="btn" id="loginBtn">دخول</button>
+      <button class="btn ghost" id="goSignupBtn">إنشاء حساب جديد</button>
+    </div>
+
+    <!-- تسجيل: جوال/إيميل + رقم سري -->
+    <div class="step" id="stepSignup">
+      <div class="field glass">
+        <label>جوالك أو إيميلك (يوصلك عليه رمز التحقق)</label>
+        <input id="sContact" type="text" inputmode="email" placeholder="05xxxxxxxx أو name@email.com" dir="ltr" autocomplete="email" autocapitalize="none" spellcheck="false" style="text-align:center">
+      </div>
+      <div class="field glass">
+        <label>رقم سري من 6 أرقام (احتفظ فيه، يُطلب عند الدخول من جوال جديد)</label>
+        <input id="sSecret" type="password" inputmode="numeric" maxlength="6" placeholder="••••••" dir="ltr" autocomplete="new-password" style="text-align:center;letter-spacing:6px">
+      </div>
+      <button class="btn" id="sendSignupOtpBtn">إرسال رمز التحقق</button>
+      <button class="btn ghost" data-back="stepLogin">رجوع</button>
+    </div>
+
+    <!-- رمز التسجيل -->
+    <div class="step" id="stepSignupOtp">
+      <div class="field glass">
+        <label id="sOtpLabel">رمز التحقق</label>
+        <input id="sOtp" type="tel" inputmode="numeric" maxlength="6" placeholder="••••••" dir="ltr" autocomplete="one-time-code" style="text-align:center;letter-spacing:6px">
+      </div>
+      <button class="btn" id="signupVerifyBtn">تأكيد</button>
+      <button class="btn ghost" data-back="stepSignup">رجوع</button>
+    </div>
+
+    <!-- إنشاء اسم المستخدم وكلمة المرور -->
+    <div class="step" id="stepCreds">
+      <div class="field glass">
+        <label>اسم مستخدم (إنجليزي، 3-20، يبدأ بحرف)</label>
+        <input id="cUser" type="text" dir="ltr" autocomplete="username" autocapitalize="none" spellcheck="false" style="text-align:center">
+      </div>
+      <div class="field glass">
+        <label>كلمة مرور (8 أحرف أو أكثر) — تستخدمها في الجوال وفي برنامج الكمبيوتر</label>
+        <input id="cPass" type="password" dir="ltr" autocomplete="new-password" style="text-align:center">
+      </div>
+      <button class="btn" id="credsBtn">إنشاء الحساب</button>
+    </div>
+
+    <!-- جوال جديد -->
+    <div class="step" id="stepNewDevice">
+      <div class="field glass">
+        <label id="dOtpLabel">رمز التحقق</label>
+        <input id="dOtp" type="tel" inputmode="numeric" maxlength="6" placeholder="••••••" dir="ltr" autocomplete="one-time-code" style="text-align:center;letter-spacing:6px">
+      </div>
+      <div class="field glass">
+        <label>رقمك السري (6 أرقام)</label>
+        <input id="dSecret" type="password" inputmode="numeric" maxlength="6" placeholder="••••••" dir="ltr" autocomplete="off" style="text-align:center;letter-spacing:6px">
+      </div>
+      <button class="btn" id="newDeviceBtn">تأكيد الجوال</button>
+      <button class="btn ghost" data-back="stepLogin">رجوع</button>
+    </div>
+
+    <!-- جهازك -->
+    <div class="step" id="stepPc">
+      <div class="field glass" style="text-align:center">
+        <label>جهازك</label>
+        <div id="pcName" style="font-size:20px;font-weight:700;margin:6px 0">—</div>
+        <div id="pcState" style="font-size:14px;opacity:.85"></div>
+      </div>
+      <button class="btn" id="connectPcBtn">اتصال بالجهاز</button>
+      <button class="btn ghost" id="refreshPcBtn">تحديث</button>
+      <button class="btn ghost" id="logoutBtn">تسجيل خروج</button>
+    </div>
+
+    <div class="info-msg" id="infoMsg" style="display:none;color:var(--teal);text-align:center;font-size:14px;line-height:1.7"></div>
+    <div class="error-msg" id="errMsg"></div>
+    <a href="/seller" id="sellerLink" style="display:block;text-align:center;margin-top:22px;font-size:12px;color:#8ea39a;opacity:.55;text-decoration:none">دخول البائع</a>
+  </div>
+</div>
+
+<!-- شاشة التحكم -->
+<div id="controlScreen">
+  <div class="statusbar glass">
+    <div class="status-left">
+      <div class="status-dot"></div>
+      <div>
+        <div class="status-title">متصل بالجهاز</div>
+        <div class="status-sub" id="ipLabel">—</div>
+      </div>
+    </div>
+    <button class="icon-btn" id="disconnectBtn">⏻</button>
+  </div>
+
+  <div id="touchpad">
+    <img id="padScreenImg" class="pad-screen-img">
+    <div class="pad-live-badge" id="liveBadge"><span class="dot"></span><span>مباشر</span></div>
+    <div class="pad-hint" id="padHint">
+      <b>حرّك إصبعك للتحكم بالماوس</b>
+      <span>ضغطة = كليك يسار · إصبعين = كليك يمين · اسحب بإصبعين = تمرير</span>
+    </div>
+  </div>
+
+  <div class="click-row">
+    <div class="click-btn" id="rightClickBtn">كليك يمين</div>
+    <div class="click-btn" id="leftClickBtn">كليك يسار</div>
+  </div>
+
+  <div class="dock glass">
+    <button class="dock-btn" data-action="keyboard"><span class="ic">⌨️</span><span class="lb">كتابة</span></button>
+    <button class="dock-btn" id="streamToggleBtn" data-action="stream-toggle"><span class="ic">🖥️</span><span class="lb" id="streamToggleLbl">إيقاف البث</span></button>
+    <button class="dock-btn" data-media="volume_down"><span class="ic">🔉</span><span class="lb">صوت-</span></button>
+    <button class="dock-btn" data-media="volume_up"><span class="ic">🔊</span><span class="lb">صوت+</span></button>
+    <button class="dock-btn" data-media="play_pause"><span class="ic">⏯️</span><span class="lb">تشغيل</span></button>
+    <button class="dock-btn" data-media="mute"><span class="ic">🔇</span><span class="lb">كتم</span></button>
+    <button class="dock-btn" data-action="power"><span class="ic">🔌</span><span class="lb">الطاقة</span></button>
+  </div>
+</div>
+
+
+
+<!-- شيت الكيبورد -->
+<div class="sheet-overlay" id="kbOverlay">
+  <div class="sheet glass">
+    <div class="sheet-handle"></div>
+    <div class="kb-row">
+      <input class="kb-input" id="kbText" type="text" placeholder="اكتب هنا وأرسل...">
+      <button class="kb-send" id="kbSend">↩</button>
+    </div>
+    <div class="kb-specials">
+      <button class="kb-key" data-key="enter">Enter ⏎</button>
+      <button class="kb-key" data-key="backspace">حذف ⌫</button>
+      <button class="kb-key" data-key="space">مسافة</button>
+      <button class="kb-key" data-key="tab">Tab ⇥</button>
+      <button class="kb-key" data-key="esc">Esc</button>
+      <button class="kb-key" data-key="up">↑</button>
+      <button class="kb-key" data-key="down">↓</button>
+      <button class="kb-key" data-key="left">←</button>
+      <button class="kb-key" data-key="right">→</button>
+    </div>
+    <button class="btn ghost" id="kbClose">إغلاق</button>
+  </div>
+</div>
+
+<!-- شيت الطاقة -->
+<div class="sheet-overlay" id="powerOverlay">
+  <div class="sheet glass">
+    <div class="sheet-handle"></div>
+    <div class="power-menu">
+      <div class="power-item">
+        <div class="lbl">🔒 قفل الجهاز</div>
+        <button class="icon-btn" data-sys="lock" style="width:44px;height:44px;">➤</button>
+      </div>
+      <div class="power-item">
+        <div class="lbl">🌙 إسبات</div>
+        <button class="icon-btn" data-sys="sleep" style="width:44px;height:44px;">➤</button>
+      </div>
+      <div class="power-item">
+        <div class="lbl">🔁 إعادة تشغيل (اضغط مطولاً)</div>
+        <div class="hold-btn" data-hold="restart">
+          <svg width="56" height="56"><circle class="bg" cx="28" cy="28" r="24"></circle><circle class="fg" cx="28" cy="28" r="24"></circle></svg>
+          <span>🔁</span>
+        </div>
+      </div>
+      <div class="power-item">
+        <div class="lbl">⚠️ إطفاء (اضغط مطولاً)</div>
+        <div class="hold-btn" data-hold="shutdown">
+          <svg width="56" height="56"><circle class="bg" cx="28" cy="28" r="24"></circle><circle class="fg" cx="28" cy="28" r="24"></circle></svg>
+          <span>⏻</span>
+        </div>
+      </div>
+    </div>
+    <button class="btn ghost" id="powerClose">إغلاق</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let ws = null;
+let authed = false;
+let streaming = false;
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=> navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+
+let deferredInstallPrompt = null;
+const installBtn = document.getElementById('installBtn');
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  installBtn.style.display = 'block';
+});
+installBtn.addEventListener('click', async ()=>{
+  if(!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  installBtn.style.display = 'none';
+});
+window.addEventListener('appinstalled', ()=> installBtn.style.display='none');
+
+const connectScreen = document.getElementById('connectScreen');
+const controlScreen = document.getElementById('controlScreen');
+const errMsg = document.getElementById('errMsg');
+const ipLabel = document.getElementById('ipLabel');
+
+function showToast(text){
+  const t = document.getElementById('toast');
+  t.textContent = text;
+  t.classList.add('show');
+  clearTimeout(showToast._tm);
+  showToast._tm = setTimeout(()=>t.classList.remove('show'), 1800);
+}
+
+function send(obj){
+  if(ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+/* ---------- الحساب: تسجيل / دخول / ربط جهاز واحد ---------- */
+const LS_KEY = 'rc_account_v2';
+function loadAcc(){
+  try{ const o = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); return (o && o.username && o.token) ? o : null; }
+  catch(e){ return null; }
+}
+function saveAcc(o){ try{ localStorage.setItem(LS_KEY, JSON.stringify(o)); }catch(e){} }
+
+const REASONS = {
+  bad_contact:'اكتب رقم جوال صحيح (05xxxxxxxx) أو إيميل صحيح',
+  bad_secret_format:'الرقم السري لازم يكون 6 أرقام',
+  bad_secret:'الرقم السري غير صحيح',
+  exists:'هذا الجوال/الإيميل مسجّل مسبقًا، سجّل دخول',
+  bad_username:'اسم المستخدم: 3-20 حرف إنجليزي أو أرقام أو _ ويبدأ بحرف',
+  bad_password:'كلمة المرور لازم تكون 8 أحرف على الأقل',
+  username_taken:'اسم المستخدم مأخوذ، اختر غيره',
+  setup_expired:'انتهت مهلة إنشاء الحساب، ابدأ التسجيل من جديد',
+  bad_credentials:'اسم المستخدم أو كلمة المرور غير صحيحة',
+  pending:'حسابك بانتظار تفعيل البائع (بعد الدفع)',
+  revoked:'هذا الحساب موقوف، تواصل مع البائع',
+  expired:'انتهت صلاحية الحساب، تواصل مع البائع',
+  rebind_limit:'وصلت للحد الأقصى لتغيير الجوال، تواصل مع البائع',
+  rate_limited:'محاولات كثيرة، حاول بعد شوي',
+  too_many_codes:'طلبت رموز كثيرة، حاول بعد ساعة',
+  cooldown:'انتظر دقيقة قبل طلب رمز جديد',
+  send_failed:'تعذر إرسال الرمز، تواصل مع البائع',
+  wrong_otp:'رمز التحقق غير صحيح',
+  otp_expired:'انتهت صلاحية الرمز، اطلب رمزًا جديدًا',
+  too_many_attempts:'محاولات خاطئة كثيرة، اطلب رمزًا جديدًا',
+  locked:'تم قفل الدخول مؤقتًا بسبب محاولات خاطئة، جرّب بعد 15 دقيقة',
+  agent_offline:'جهازك غير متصل. شغّل البرنامج على الكمبيوتر وتأكد إنه شغّال'
+};
+const STEP_SUB = {
+  stepLogin:'سجّل دخولك للتحكم بجهازك.',
+  stepSignup:'أنشئ حسابك: جوالك أو إيميلك مع رقم سري.',
+  stepSignupOtp:'أدخل رمز التحقق اللي وصلك.',
+  stepCreds:'اختر اسم مستخدم وكلمة مرور لبرنامج التحكم.',
+  stepNewDevice:'هذا جوال جديد: أدخل الرمز اللي وصلك ورقمك السري.',
+  stepPc:'جهازك المربوط بحسابك.'
+};
+const STEPS = Object.keys(STEP_SUB);
+const BTNS = ['loginBtn','sendSignupOtpBtn','signupVerifyBtn','credsBtn','newDeviceBtn','connectPcBtn'];
+
+let acc = loadAcc();
+let lastCreds = {username:'', password:''};
+let signupContact = '';
+let setupToken = '';
+let currentStep = 'stepLogin';
+let pcOnline = false;
+
+const $ = id => document.getElementById(id);
+function setErr(text){ errMsg.textContent = text || ''; }
+function setInfo(text){ const e = $('infoMsg'); e.textContent = text || ''; e.style.display = text ? '' : 'none'; }
+function setBusy(btn, on){ btn.disabled = !!on; }
+function showStep(name){
+  currentStep = name;
+  STEPS.forEach(id=> $(id).classList.toggle('show', id === name));
+  $('cSub').textContent = STEP_SUB[name];
+  setErr('');
+  BTNS.forEach(id=> setBusy($(id), false));
+}
+function failText(msg){
+  let t = REASONS[msg.reason] || 'تعذر تنفيذ الطلب';
+  if(msg.reason === 'cooldown' && msg.wait) t = 'انتظر ' + msg.wait + ' ثانية قبل طلب رمز جديد';
+  return t;
+}
+function maskedLabel(el, prefix, masked){
+  el.textContent = prefix;
+  const bd = document.createElement('bdi'); bd.dir = 'ltr'; bd.textContent = String(masked);
+  el.appendChild(bd); el.appendChild(document.createTextNode(')'));
+}
+function renderPc(pc){
+  pcOnline = !!(pc && pc.online);
+  $('pcName').textContent = (pc && pc.name) ? pc.name : 'جهازك';
+  $('pcState').textContent = pcOnline ? '🟢 متصل ومستعد' : '⚪ غير متصل — شغّل البرنامج على الكمبيوتر';
+  $('connectPcBtn').disabled = !pcOnline;
+}
+function backToLogin(info){
+  authed = false;
+  controlScreen.style.display = 'none';
+  connectScreen.style.display = 'flex';
+  $('loginUser').value = acc ? acc.username : $('loginUser').value;
+  $('loginPass').value = '';
+  showStep('stepLogin');
+  setInfo(info || '');
+  resetScreenView();
+}
+
+function onClose(sock){
+  if(sock !== ws) return;
+  if(authed){ showToast('انقطع الاتصال'); backToLogin(); }
+  else if(currentStep === 'stepPc'){ backToLogin(); setErr('انقطع الاتصال بالسيرفر'); }
+}
+
+function onMessage(ev){
+  let msg; try{ msg = JSON.parse(ev.data); }catch(e){ return; }
+  const t = msg.type;
+  const ok = msg.ok !== false;
+
+  if(t === 'otp_sent'){
+    maskedLabel($('sOtpLabel'), 'رمز التحقق (أُرسل إلى ', msg.masked);
+    showStep('stepSignupOtp'); $('sOtp').focus();
+
+  }else if(t === 'signup_verified'){
+    setupToken = msg.setup_token;
+    showStep('stepCreds'); $('cUser').focus();
+
+  }else if(t === 'account_ready'){
+    acc = {username: msg.username, token: msg.token};
+    saveAcc(acc);
+    if(msg.status === 'active'){
+      lastCreds = {username: msg.username, password: $('cPass').value};
+      send({type:'login', ...lastCreds, token: acc.token});
+    }else{
+      $('loginUser').value = msg.username;
+      showStep('stepLogin');
+      setInfo('تم إنشاء حسابك ✅ بانتظار تفعيل البائع بعد الدفع. بعد التفعيل سجّل دخولك.');
+    }
+    $('cPass').value = '';
+
+  }else if(t === 'need_otp'){
+    maskedLabel($('dOtpLabel'), 'رمز التحقق (أُرسل إلى ', msg.masked);
+    showStep('stepNewDevice'); $('dOtp').focus();
+
+  }else if(t === 'login_ok'){
+    if(msg.token){ acc = {username: msg.username, token: msg.token}; saveAcc(acc); }
+    else if(!acc){ /* دخول بدون توكن محفوظ لا يصير: السيرفر يطلب رمز */ }
+    $('loginPass').value = ''; $('dOtp').value = ''; $('dSecret').value = '';
+    setInfo('');
+    showStep('stepPc');
+    renderPc(msg.pc);
+
+  }else if((t === 'signup_result' || t === 'login_result') && !ok){
+    BTNS.forEach(id=> setBusy($(id), false));
+    if(msg.reason === 'otp_expired' || msg.reason === 'too_many_attempts'){
+      showStep(currentStep === 'stepSignupOtp' ? 'stepSignup' : 'stepLogin');
+    }
+    setErr(failText(msg));
+
+  }else if(t === 'pc_status'){
+    renderPc(msg);
+
+  }else if(t === 'auth_result'){
+    setBusy($('connectPcBtn'), false);
+    if(msg.ok){
+      authed = true;
+      ipLabel.textContent = acc ? acc.username : '';
+      connectScreen.style.display = 'none';
+      controlScreen.style.display = 'flex';
+      setErr('');
+      streaming = true;   // نشغّل بث الشاشة فور الاتصال
+      send({type:'stream', on:true});
+      $('streamToggleLbl').textContent = 'إيقاف البث';
+    }else{
+      if(msg.reason === 'agent_offline') renderPc({online:false, name:$('pcName').textContent});
+      setErr(failText(msg));
+    }
+
+  }else if(t === 'agent_offline'){
+    if(authed) showToast('انقطع جهاز الكمبيوتر عن الوسيط'); else renderPc({online:false, name:$('pcName').textContent});
+  }else if(t === 'agent_online'){
+    if(authed) showToast('الكمبيوتر اتصل'); else renderPc({online:true, name: msg.name || $('pcName').textContent});
+  }else if(t === 'kicked'){
+    showToast('دخل جوال ثاني بنفس الحساب');
+    if(!authed) backToLogin('دخل جوال ثاني بنفس الحساب');
+  }else if(t === 'license_ended'){
+    showToast('انتهى الحساب أو تم إيقافه');
+    if(!authed) backToLogin('انتهى الحساب أو تم إيقافه');
+  }else if(t === 'frame'){
+    const img = $('padScreenImg');
+    img.src = 'data:image/jpeg;base64,' + msg.data;
+    if(img.style.display !== 'block'){
+      img.style.display = 'block';
+      $('liveBadge').style.display = 'flex';
+      $('padHint').style.opacity = '0';
+    }
+  }
+}
+
+function openWs(){
+  return new Promise((resolve, reject)=>{
+    if(ws && ws.readyState === 1){ resolve(ws); return; }
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+    let sock;
+    try{ sock = new WebSocket(`${scheme}://${location.host}/ws`); }
+    catch(e){ reject(e); return; }
+    ws = sock;
+    sock.onopen = ()=> resolve(sock);
+    sock.onerror = ()=> reject(new Error('ws'));
+    sock.onclose = ()=> onClose(sock);
+    sock.onmessage = onMessage;
+  });
+}
+
+async function go(btnId, payload){
+  setErr(''); setInfo('');
+  setBusy($(btnId), true);
+  try{ await openWs(); send(payload); }
+  catch(e){ setBusy($(btnId), false); setErr('تعذر الاتصال بالسيرفر'); }
+}
+
+document.querySelectorAll('[data-back]').forEach(b=>
+  b.addEventListener('click', ()=> showStep(b.dataset.back)));
+$('goSignupBtn').addEventListener('click', ()=> showStep('stepSignup'));
+
+$('loginBtn').addEventListener('click', ()=>{
+  const username = $('loginUser').value.trim().toLowerCase();
+  const password = $('loginPass').value;
+  if(!username || !password){ setErr('اكتب اسم المستخدم وكلمة المرور'); return; }
+  lastCreds = {username, password};
+  go('loginBtn', {type:'login', username, password, token: (acc && acc.username === username) ? acc.token : ''});
+});
+
+$('sendSignupOtpBtn').addEventListener('click', ()=>{
+  const contact = $('sContact').value.trim();
+  const secret = $('sSecret').value.trim();
+  if(!contact){ setErr('اكتب جوالك أو إيميلك'); return; }
+  if(!/^\d{6}$/.test(secret)){ setErr(REASONS.bad_secret_format); return; }
+  signupContact = contact;
+  go('sendSignupOtpBtn', {type:'signup_start', contact, secret});
+});
+
+$('signupVerifyBtn').addEventListener('click', ()=>{
+  const otp = $('sOtp').value.trim();
+  if(!otp){ setErr('اكتب رمز التحقق'); return; }
+  go('signupVerifyBtn', {type:'signup_verify', contact: signupContact, otp});
+});
+
+$('credsBtn').addEventListener('click', ()=>{
+  const username = $('cUser').value.trim().toLowerCase();
+  const password = $('cPass').value;
+  if(!/^[a-z][a-z0-9_]{2,19}$/.test(username)){ setErr(REASONS.bad_username); return; }
+  if(password.length < 8){ setErr(REASONS.bad_password); return; }
+  go('credsBtn', {type:'set_credentials', setup_token: setupToken, username, password});
+});
+
+$('newDeviceBtn').addEventListener('click', ()=>{
+  const otp = $('dOtp').value.trim();
+  const secret = $('dSecret').value.trim();
+  if(!otp){ setErr('اكتب رمز التحقق'); return; }
+  if(!/^\d{6}$/.test(secret)){ setErr(REASONS.bad_secret_format); return; }
+  go('newDeviceBtn', {type:'login_verify', ...lastCreds, otp, secret});
+});
+
+$('connectPcBtn').addEventListener('click', ()=> go('connectPcBtn', {type:'connect_pc'}));
+$('refreshPcBtn').addEventListener('click', ()=>{ send({type:'pc_status'}); });
+$('logoutBtn').addEventListener('click', ()=>{ if(ws) try{ ws.close(); }catch(e){} backToLogin(); });
+
+if(acc) $('loginUser').value = acc.username;
+showStep('stepLogin');
+
+function resetScreenView(){
+  streaming = false;
+  const img = document.getElementById('padScreenImg');
+  img.style.display = 'none';
+  img.src = '';
+  document.getElementById('liveBadge').style.display = 'none';
+  document.getElementById('padHint').style.opacity = '.7';
+  document.getElementById('streamToggleLbl').textContent = 'إيقاف البث';
+}
+
+document.getElementById('disconnectBtn').addEventListener('click', ()=>{
+  if(ws) ws.close();
+  backToLogin();
+});
+
+/* ---------- التاتش باد ---------- */
+const pad = document.getElementById('touchpad');
+let touchState = null;
+
+function spawnRipple(x, y){
+  const r = document.createElement('div');
+  r.className = 'ripple';
+  r.style.left = x+'px'; r.style.top = y+'px';
+  pad.appendChild(r);
+  setTimeout(()=>r.remove(), 500);
+}
+
+pad.addEventListener('touchstart', (e)=>{
+  const rect = pad.getBoundingClientRect();
+  const t0 = e.touches[0];
+  pad.style.setProperty('--px', (t0.clientX-rect.left)+'px');
+  pad.style.setProperty('--py', (t0.clientY-rect.top)+'px');
+
+  touchState = {
+    count: e.touches.length,
+    lastX: t0.clientX, lastY: t0.clientY,
+    startX: t0.clientX, startY: t0.clientY,
+    startT: Date.now(),
+    moved: false,
+    lastY2: e.touches.length>1 ? e.touches[1].clientY : null,
+  };
+}, {passive:true});
+
+pad.addEventListener('touchmove', (e)=>{
+  if(!touchState) return;
+  const rect = pad.getBoundingClientRect();
+  const t0 = e.touches[0];
+  pad.style.setProperty('--px', (t0.clientX-rect.left)+'px');
+  pad.style.setProperty('--py', (t0.clientY-rect.top)+'px');
+
+  if(e.touches.length >= 2){
+    const t1 = e.touches[1];
+    const avgY = (t0.clientY + t1.clientY)/2;
+    if(touchState.lastY2 !== null){
+      const dy = avgY - touchState.lastY2;
+      if(Math.abs(dy) > 2) send({type:'scroll', dy: Math.round(dy/3)});
+    }
+    touchState.lastY2 = avgY;
+    touchState.moved = true;
+  }else{
+    const dx = (t0.clientX - touchState.lastX) * 1.6;
+    const dy = (t0.clientY - touchState.lastY) * 1.6;
+    if(Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5){
+      send({type:'move', dx, dy});
+      touchState.moved = true;
+    }
+    touchState.lastX = t0.clientX;
+    touchState.lastY = t0.clientY;
+  }
+}, {passive:true});
+
+pad.addEventListener('touchend', (e)=>{
+  if(!touchState) return;
+  const dt = Date.now() - touchState.startT;
+  const distMoved = Math.hypot(touchState.lastX-touchState.startX, touchState.lastY-touchState.startY);
+  const rect = pad.getBoundingClientRect();
+
+  if(!touchState.moved && dt < 260 && distMoved < 10){
+    spawnRipple(touchState.startX-rect.left, touchState.startY-rect.top);
+    if(touchState.count >= 2){
+      send({type:'click', button:'right'});
+    }else{
+      send({type:'click', button:'left'});
+    }
+  }
+  touchState = null;
+}, {passive:true});
+
+document.getElementById('leftClickBtn').addEventListener('touchstart', ()=> send({type:'click', button:'left'}), {passive:true});
+document.getElementById('rightClickBtn').addEventListener('touchstart', ()=> send({type:'click', button:'right'}), {passive:true});
+
+/* ---------- الدوك ---------- */
+document.querySelectorAll('.dock-btn[data-media]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    send({type:'media', action: btn.dataset.media});
+    showToast('تم');
+  });
+});
+
+document.querySelector('[data-action="keyboard"]').addEventListener('click', ()=>{
+  document.getElementById('kbOverlay').classList.add('show');
+});
+document.getElementById('kbClose').addEventListener('click', ()=>{
+  document.getElementById('kbOverlay').classList.remove('show');
+});
+document.getElementById('kbSend').addEventListener('click', ()=>{
+  const inp = document.getElementById('kbText');
+  if(inp.value){ send({type:'type', text: inp.value}); inp.value=''; }
+});
+document.querySelectorAll('.kb-key').forEach(btn=>{
+  btn.addEventListener('click', ()=> send({type:'key', key: btn.dataset.key}));
+});
+
+document.querySelector('[data-action="power"]').addEventListener('click', ()=>{
+  document.getElementById('powerOverlay').classList.add('show');
+});
+document.getElementById('powerClose').addEventListener('click', ()=>{
+  document.getElementById('powerOverlay').classList.remove('show');
+});
+
+document.getElementById('streamToggleBtn').addEventListener('click', ()=>{
+  streaming = !streaming;
+  send({type:'stream', on:streaming});
+  document.getElementById('streamToggleLbl').textContent = streaming ? 'إيقاف البث' : 'تشغيل البث';
+  if(!streaming){
+    document.getElementById('padScreenImg').style.display = 'none';
+    document.getElementById('liveBadge').style.display = 'none';
+    document.getElementById('padHint').style.opacity = '.7';
+  }
+});
+document.querySelectorAll('[data-sys]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    send({type:'system', action: btn.dataset.sys});
+    showToast('تم الإرسال');
+  });
+});
+
+/* اضغط مطولاً للإطفاء/إعادة التشغيل */
+document.querySelectorAll('.hold-btn').forEach(btn=>{
+  let timer=null;
+  const start = ()=>{
+    btn.classList.add('filling');
+    timer = setTimeout(()=>{
+      send({type:'system', action: btn.dataset.hold});
+      showToast('تم الإرسال');
+      btn.classList.remove('filling');
+    }, 1100);
+  };
+  const cancel = ()=>{
+    clearTimeout(timer);
+    btn.classList.remove('filling');
+  };
+  btn.addEventListener('touchstart', start, {passive:true});
+  btn.addEventListener('touchend', cancel, {passive:true});
+  btn.addEventListener('touchcancel', cancel, {passive:true});
+});
+</script>
+</body>
+</html>
