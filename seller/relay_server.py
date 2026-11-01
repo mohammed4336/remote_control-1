@@ -19,6 +19,7 @@ import secrets
 import sys
 import time
 from collections import defaultdict
+from urllib.parse import urlparse
 
 from aiohttp import web, WSMsgType
 
@@ -63,12 +64,23 @@ def record(name, key):
     buckets[(name, key)].append(time.time())
 
 
+TRUST_PROXY = os.environ.get("TRUST_PROXY", "").strip().lower()   # "" | "cf" | "xff"  (خلف Render/Cloudflare)
+
+
 def client_ip(request):
-    # نثق بهيدر Cloudflare فقط لو الاتصال جاي من النفق المحلي
+    # نثق بهيدر الوسيط فقط لو الاتصال جاي من النفق المحلي أو لو فعّلت TRUST_PROXY
     if request.remote in ("127.0.0.1", "::1"):
         fwd = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", "")
         if fwd:
             return fwd.split(",")[0].strip()
+    elif TRUST_PROXY == "cf":
+        v = request.headers.get("CF-Connecting-IP", "").strip()
+        if v:
+            return v
+    elif TRUST_PROXY == "xff":
+        parts = [x.strip() for x in request.headers.get("X-Forwarded-For", "").split(",") if x.strip()]
+        if parts:
+            return parts[-1]
     return request.remote or "unknown"
 
 
@@ -126,30 +138,14 @@ async def issue_otp(st, channel, contact, code_for_limits=None):
 
 def check_otp(st, key, otp):
     """يتحقق من الرمز. يرجّع None لو صح أو سبب الرفض."""
-    now = time.time()
-
-    print(
-        "[OTP DEBUG]",
-        "state_exists:", bool(st),
-        "hash_exists:", bool(st and st.get("hash")),
-        "now:", now,
-        "exp:", st.get("exp") if st else None,
-        "remaining:", (st["exp"] - now) if st else None,
-        flush=True
-    )
-
-    if not st or not st.get("hash") or now > st["exp"]:
+    if not st or not st.get("hash") or time.time() > st["exp"]:
         return "otp_expired"
-
     st["attempts"] += 1
-
     if st["attempts"] > OTP_MAX_ATTEMPTS:
         st["hash"] = None
         return "too_many_attempts"
-
     if not hmac.compare_digest(_h(key + str(otp)), st["hash"]):
         return "wrong_otp"
-
     return None
 
 
@@ -243,49 +239,30 @@ async def start_session(ws, row, new_token=None):
 async def on_login(ws, ip, msg):
     if over("fail", ip, 15, 600):
         return await fail(ws, "login_result", "rate_limited")
-
-    row = ldb.get_by_username(
-        ldb.normalize_username(msg.get("username")) or ""
-    )
-
-    print("[LOGIN DEBUG] username_valid:",
-          bool(ldb.normalize_username(msg.get("username"))), flush=True)
-    print("[LOGIN DEBUG] account_found:", bool(row), flush=True)
-    print("[LOGIN DEBUG] password_hash_exists:",
-          bool(row and row.get("pw_hash")), flush=True)
-    print("[LOGIN DEBUG] password_matches:",
-      ldb.check_password(row, msg.get("password", "")), flush=True)
-
+    row = ldb.get_by_username(ldb.normalize_username(msg.get("username")) or "")
     code = row and row["code"]
-
     if code and locked(code):
         return await fail(ws, "login_result", "locked")
-
     if not ldb.check_password(row, msg.get("password", "")):
         record("fail", ip)
         if code:
             auth_fails[code].append(time.time())
         return await fail(ws, "login_result", "bad_credentials")
-
     ok, reason = ldb.usable(row)
     if not ok:
         return await fail(ws, "login_result", reason)
-
     if ldb.check_token(row, str(msg.get("token", ""))):
         return await start_session(ws, row)
-
+    # جوال جديد: لازم رمز على جهة التسجيل + الرقم السري
     if row["phone_binds"] >= ldb.MAX_PHONE_BINDS:
         return await fail(ws, "login_result", "rebind_limit")
-
     if over("start", ip, 10, 3600):
         return await fail(ws, "login_result", "rate_limited")
-
     record("start", ip)
     st = otp_state.setdefault(code, {"sent": [], "hash": None, "exp": 0, "attempts": 0})
     otp, why, wait = await issue_otp(st, row["channel"], row["contact"])
     if why:
         return await fail(ws, "login_result", why, wait=wait)
-
     st.update(hash=_h(code + otp), exp=time.time() + OTP_TTL, attempts=0)
     await reply(ws, "need_otp", masked=ldb.mask_contact(row["channel"], row["contact"]))
 
@@ -547,216 +524,183 @@ async def admin_run(request):
     out, _ = await asyncio.wait_for(proc.communicate(), 20)
     return web.json_response({"ok": proc.returncode == 0, "output": out.decode("utf-8", "replace")})
 
-# ---------------------------------------------------------------- لوحة البائع الخاصة
 
-SELLER_USERNAME = os.environ.get("SELLER_USERNAME", "").strip()
-SELLER_PASSWORD = os.environ.get("SELLER_PASSWORD", "").strip()
+# ---------------------------------------------------------------- لوحة البائع (موقع إدارة الاشتراكات)
+SELLER_USER = os.environ.get("SELLER_USERNAME", "").strip()
+SELLER_PASS = os.environ.get("SELLER_PASSWORD", "")
+SELLER_COOKIE = "rc_seller"
+SELLER_TTL = 12 * 3600
+seller_sessions = {}   # session id -> expiry
 
-
-def seller_authorized(request):
-    auth = request.headers.get("Authorization", "")
-
-    print(
-        "[SELLER DEBUG]",
-        "username_configured:", bool(SELLER_USERNAME),
-        "password_configured:", len(SELLER_PASSWORD) >= 16,
-        "authorization_received:", auth.startswith("Basic "),
-        flush=True
-    )
-
-    if len(SELLER_PASSWORD) < 16 or not SELLER_USERNAME:
-        return False
-
-    if not auth.startswith("Basic "):
-        return False
-
-    import base64
-    try:
-        decoded = base64.b64decode(auth[6:]).decode("utf-8")
-        username, password = decoded.split(":", 1)
-    except Exception:
-        return False
-
-    user_ok = hmac.compare_digest(username, SELLER_USERNAME)
-    pass_ok = hmac.compare_digest(password, SELLER_PASSWORD)
-
-    print(
-        "[SELLER DEBUG]",
-        "username_match:", user_ok,
-        "password_match:", pass_ok,
-        flush=True
-    )
-
-    return user_ok and pass_ok
+LOGIN_HTML = """<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>دخول البائع</title>
+<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#071b16;color:#edf8f2;font-family:Tahoma,Arial,sans-serif}
+form{background:#0d2a22;border:1px solid #235344;border-radius:14px;padding:28px;width:min(92vw,360px)}
+h1{color:#8ee5ad;font-size:22px;margin:0 0 18px}input{display:block;width:100%;margin:10px 0;padding:12px;border-radius:8px;border:1px solid #235344;background:#061a14;color:#fff}
+button{width:100%;margin-top:8px;padding:12px;border:0;border-radius:8px;background:#8ee5ad;color:#092318;font-weight:700;cursor:pointer}#e{color:#ff8585;min-height:22px;font-size:14px}</style></head>
+<body><form id="f"><h1>دخول البائع</h1>
+<input id="u" placeholder="اسم المستخدم" autocomplete="username" autocapitalize="none">
+<input id="p" type="password" placeholder="كلمة المرور" autocomplete="current-password">
+<div id="e"></div><button>دخول</button></form>
+<script>document.getElementById('f').addEventListener('submit',async ev=>{ev.preventDefault();
+const e=document.getElementById('e');e.textContent='';
+try{const r=await fetch('/seller/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({username:u.value,password:p.value})});
+if(r.ok){location.reload();return}
+e.textContent=r.status===429?'محاولات كثيرة، جرّب بعد 15 دقيقة':'بيانات الدخول غير صحيحة'}
+catch(x){e.textContent='تعذر الاتصال بالسيرفر'}});</script></body></html>"""
 
 
-def seller_auth_required(request):
-    if not seller_authorized(request):
-        raise web.HTTPUnauthorized(
-            headers={"WWW-Authenticate": 'Basic realm="Seller Panel"'}
-        )
+def seller_enabled():
+    return bool(SELLER_USER) and len(SELLER_PASS) >= 8
 
 
-def seller_check_origin(request):
-    origin = request.headers.get("Origin", "")
-    if not origin or origin.split("://", 1)[-1].rstrip("/") != request.host:
-        raise web.HTTPForbidden(text="Invalid origin")
+def seller_authed(request):
+    sid = request.cookies.get(SELLER_COOKIE, "")
+    exp = seller_sessions.get(sid)
+    if exp and exp > time.time():
+        return True
+    seller_sessions.pop(sid, None)
+    return False
 
 
-def seller_status(row):
-    ok, reason = ldb.usable(row)
-    if ok:
-        return "active"
-    return reason or "inactive"
+def same_origin(request):
+    origin = request.headers.get("Origin")
+    return not origin or urlparse(origin).netloc == request.host
+
+
+def seller_json(data, status=200):
+    return web.json_response(data, status=status, headers=NO_CACHE)
 
 
 async def seller_page(request):
-    seller_auth_required(request)
-    return web.FileResponse(
-        os.path.join(BASE_DIR, "seller.html"),
-        headers={"Cache-Control": "no-store"}
-    )
+    if not seller_enabled():
+        raise web.HTTPNotFound()
+    if seller_authed(request):
+        return web.FileResponse(os.path.join(BASE_DIR, "seller.html"), headers=NO_CACHE)
+    return web.Response(text=LOGIN_HTML, content_type="text/html", headers=NO_CACHE)
+
+
+async def seller_login(request):
+    if not seller_enabled():
+        raise web.HTTPNotFound()
+    ip = client_ip(request)
+    if not same_origin(request):
+        return seller_json({"ok": False, "error": "forbidden"}, 403)
+    if over("seller_fail", ip, 5, 900):
+        return seller_json({"ok": False, "error": "rate_limited"}, 429)
+    try:
+        d = await request.json()
+        u, p = str(d.get("username", "")), str(d.get("password", ""))
+    except Exception:
+        return seller_json({"ok": False, "error": "bad_request"}, 400)
+    ok_u = hmac.compare_digest(u.encode(), SELLER_USER.encode())
+    ok_p = hmac.compare_digest(p.encode(), SELLER_PASS.encode())
+    if not (ok_u and ok_p):
+        record("seller_fail", ip)
+        return seller_json({"ok": False, "error": "unauthorized"}, 401)
+    sid = secrets.token_urlsafe(32)
+    now = time.time()
+    for k in [k for k, v in seller_sessions.items() if v < now]:
+        seller_sessions.pop(k, None)
+    seller_sessions[sid] = now + SELLER_TTL
+    resp = seller_json({"ok": True})
+    secure = request.headers.get("X-Forwarded-Proto", request.scheme) == "https"
+    resp.set_cookie(SELLER_COOKIE, sid, max_age=SELLER_TTL, httponly=True, samesite="Strict", secure=secure, path="/")
+    return resp
+
+
+def seller_guard(request):
+    """يرجّع استجابة خطأ لو الطلب مو مصرّح، وإلا None."""
+    if not seller_enabled():
+        raise web.HTTPNotFound()
+    if not seller_authed(request):
+        return seller_json({"ok": False, "error": "unauthorized"}, 401)
+    if request.method != "GET" and not same_origin(request):
+        return seller_json({"ok": False, "error": "forbidden"}, 403)
+    return None
 
 
 async def seller_list(request):
-    seller_auth_required(request)
-
-    try:
-        rows = ldb.list_licenses()
-        result = []
-
-        for r in rows:
-            result.append({
-                "code": r["code"],
-                "username": r.get("username") or "بدون اسم",
-                "status": seller_status(r),
-                "contact": ldb.mask_contact(
-                    r.get("channel", ""),
-                    r.get("contact", "")
-                ),
-                "created_at": r.get("created_at"),
-                "expires_at": r.get("expires_at"),
-                "agent_online": bool(
-                    rooms.get(r["code"], {}).get("agent")
-                )
-            })
-
-        return web.json_response({"ok": True, "licenses": result})
-
-    except Exception as e:
-        print("[SELLER] list error:", e, flush=True)
-        return web.json_response(
-            {"ok": False, "error": "database_error"},
-            status=500
-        )
+    bad = seller_guard(request)
+    if bad:
+        return bad
+    rows = ldb.list_licenses()
+    rows.sort(key=lambda r: (r["status"] != "pending", -r["created_at"]))
+    out = [{
+        "code": r["code"], "username": r.get("username"), "status": r["status"],
+        "masked_contact": ldb.mask_contact(r["channel"], r["contact"]) if r["contact"] else "",
+        "expires_at": r["expires_at"], "created_at": r["created_at"],
+        "agent_name": r.get("agent_name"), "agent_ip": r.get("agent_ip"),
+        "has_pc": bool(r["agent_hash"]), "has_phone": bool(r["phone_token_hash"]),
+        "phone_binds": r["phone_binds"],
+        "online": bool((rooms.get(r["code"]) or {}).get("agent")),
+    } for r in rows]
+    return seller_json({"ok": True, "licenses": out})
 
 
-async def seller_activate(request):
-    seller_auth_required(request)
-    seller_check_origin(request)
+SELLER_ACTIONS = ("activate", "extend", "revoke", "restore", "reset_agent", "reset_phone", "delete")
 
+
+async def seller_action(request):
+    bad = seller_guard(request)
+    if bad:
+        return bad
     code = ldb.normalize_code(request.match_info["code"])
-    if not code:
-        return web.json_response({"ok": False, "error": "bad_code"}, status=400)
-
-    row = ldb.get_license(code)
-    if not row:
-        return web.json_response({"ok": False, "error": "not_found"}, status=404)
-
-    try:
-        data = await request.json()
-        days = int(data.get("days", 30))
-        if not 1 <= days <= 3650:
-            raise ValueError
-    except Exception:
-        return web.json_response({"ok": False, "error": "invalid_days"}, status=400)
-
-    expires = int(time.time()) + days * 86400
-
-    with ldb.db() as c:
-        c.execute(
-            "UPDATE licenses SET status='active', expires_at=%s WHERE code=%s",
-            (expires, code)
-        )
-
-    return web.json_response({"ok": True, "expires_at": expires})
-
-
-async def seller_revoke(request):
-    seller_auth_required(request)
-    seller_check_origin(request)
-
-    code = ldb.normalize_code(request.match_info["code"])
-    if not code:
-        return web.json_response({"ok": False, "error": "bad_code"}, status=400)
-
-    if not ldb.get_license(code):
-        return web.json_response({"ok": False, "error": "not_found"}, status=404)
-
-    ldb.set_status(code, "revoked")
-
-    return web.json_response({"ok": True})
+    action = request.match_info["action"]
+    row = code and ldb.get_license(code)
+    if not row or action not in SELLER_ACTIONS:
+        return seller_json({"ok": False, "error": "not_found"}, 404)
+    now = int(time.time())
+    if action in ("activate", "extend"):
+        try:
+            days = int((await request.json()).get("days"))
+            assert 1 <= days <= 3650
+        except Exception:
+            return seller_json({"ok": False, "error": "أدخل عدد أيام من 1 إلى 3650"}, 400)
+        with ldb.db() as c:
+            if action == "activate":
+                c.execute("UPDATE licenses SET status='active', expires_at=? WHERE code=?", (now + days * 86400, code))
+            else:
+                base = max(now, row["expires_at"] or 0)
+                c.execute("UPDATE licenses SET expires_at=? WHERE code=?", (base + days * 86400, code))
+    elif action == "revoke":
+        ldb.set_status(code, "revoked")
+    elif action == "restore":
+        ldb.set_status(code, "active")
+    elif action == "reset_agent":
+        ldb.reset(code, "agent")
+    elif action == "reset_phone":
+        ldb.reset(code, "phone")
+    elif action == "delete":
+        with ldb.db() as c:
+            c.execute("DELETE FROM licenses WHERE code=?", (code,))
+    return seller_json({"ok": True})
 
 
-async def seller_extend(request):
-    seller_auth_required(request)
-    seller_check_origin(request)
+async def seller_logout(request):
+    if not same_origin(request):
+        return seller_json({"ok": False, "error": "forbidden"}, 403)
+    seller_sessions.pop(request.cookies.get(SELLER_COOKIE, ""), None)
+    resp = seller_json({"ok": True})
+    resp.del_cookie(SELLER_COOKIE, path="/")
+    return resp
 
-    code = ldb.normalize_code(request.match_info["code"])
-    if not code:
-        return web.json_response({"ok": False, "error": "bad_code"}, status=400)
 
-    row = ldb.get_license(code)
-    if not row:
-        return web.json_response({"ok": False, "error": "not_found"}, status=404)
-
-    try:
-        data = await request.json()
-        days = int(data.get("days", 30))
-        if not 1 <= days <= 3650:
-            raise ValueError
-    except Exception:
-        return web.json_response({"ok": False, "error": "invalid_days"}, status=400)
-
-    base = max(int(time.time()), row.get("expires_at") or 0)
-    expires = base + days * 86400
-
-    with ldb.db() as c:
-        c.execute(
-            "UPDATE licenses SET expires_at=%s, status='active' WHERE code=%s",
-            (expires, code)
-        )
-
-    return web.json_response({"ok": True, "expires_at": expires})
 def make_app():
     app = web.Application()
-
-    # إدارة التراخيص القديمة
     app.router.add_post("/admin/run", admin_run)
-
-    # لوحة البائع
     app.router.add_get("/seller", seller_page)
-    app.router.add_get("/seller/", seller_page)
+    app.router.add_post("/seller/login", seller_login)
+    app.router.add_post("/seller/logout", seller_logout)
     app.router.add_get("/seller/api/licenses", seller_list)
-    app.router.add_post("/seller/api/licenses/{code}/activate", seller_activate)
-    app.router.add_post("/seller/api/licenses/{code}/revoke", seller_revoke)
-    app.router.add_post("/seller/api/licenses/{code}/extend", seller_extend)
-
-    # واجهة العميل
+    app.router.add_post("/seller/api/licenses/{code}/{action}", seller_action)
     app.router.add_get("/", index)
     app.router.add_get("/control.html", index)
-
-    for name in (
-    "manifest.json", "sw.js",
-    "icon-192.png", "icon-512.png",
-    "icon-512-maskable.png",
-    "seller.css", "seller.js"
-):
+    for name in ("manifest.json", "sw.js", "icon-192.png", "icon-512.png", "icon-512-maskable.png"):
         app.router.add_get("/" + name, asset)
-
     app.router.add_get("/health", health)
     app.router.add_get("/ws", ws_handler)
-
     app.cleanup_ctx.append(background)
     return app
 
@@ -768,6 +712,7 @@ def main():
     print("=" * 56)
     print(f"  المنفذ: {PORT}")
     print(f"  إرسال الرموز: {otpmod.describe()}")
+    print(f"  لوحة البائع: {'/seller (مفعّلة)' if seller_enabled() else 'مقفولة (ضع SELLER_USERNAME و SELLER_PASSWORD 8+ أحرف)'}")
     print(f"  وضع التسجيل: {SIGNUP_MODE}  (approval = الحساب ينتظر تفعيلك بعد الدفع | open = فوري)")
     if otpmod.is_dev_mode():
         print("  ⚠️ وضع تجربة: الرمز يطبع هنا بدل ما يوصل للمشتري (راجع otp.py)")
