@@ -2,6 +2,7 @@
 """قاعدة بيانات التراخيص (SQLite) — يستخدمها السيرفر الوسيط وأداة الإدارة فقط.
 لا تعطِ هذا الملف للمشتري."""
 
+import atexit
 import contextlib
 import hashlib
 import hmac
@@ -10,6 +11,7 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
 
 
@@ -29,14 +31,158 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    changed = False
     try:
         yield conn
         conn.commit()
+        changed = conn.total_changes > 0
+    finally:
+        conn.close()
+    if changed:
+        _cloud_dirty()
+
+
+# ---------------------------------------------------------------- حفظ سحابي مجاني (اختياري)
+# الاستضافة المجانية تمسح الملفات عند كل إعادة تشغيل. لو ضبطت DATABASE_URL (قاعدة Postgres
+# مجانية مثل Neon أو Supabase) نحفظ نسخة كاملة من القاعدة هناك بعد كل تعديل، ونستعيدها عند الإقلاع.
+CLOUD_URL = os.environ.get("DATABASE_URL", "").strip()
+_cloud_lock = threading.Lock()
+_cloud_timer = None
+_cloud_enabled = False
+_cloud_ver = 0
+
+
+def _pg():
+    import psycopg2
+    conn = psycopg2.connect(CLOUD_URL, connect_timeout=15)
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS rc_backup(id INTEGER PRIMARY KEY, data BYTEA NOT NULL, updated BIGINT NOT NULL)")
+    conn.commit()
+    return conn
+
+
+def _cloud_load():
+    """يرجع (بايتات, رقم_نسخة) لآخر نسخة محفوظة أو (None, 0)."""
+    conn = _pg()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT data, updated FROM rc_backup WHERE id=1")
+            row = cur.fetchone()
+        return (bytes(row[0]), int(row[1])) if row else (None, 0)
     finally:
         conn.close()
 
 
+def _cloud_save(data, expected_ver):
+    """يحفظ فقط لو النسخة السحابية ما تغيّرت من آخر مرة شفناها (حماية من نسختين شغّالتين معًا).
+    يرجع (True, رقم_جديد) أو (False, (بايتات_السحابة, رقمها)) عند التعارض."""
+    conn = _pg()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT data, updated FROM rc_backup WHERE id=1 FOR UPDATE")
+            row = cur.fetchone()
+            if row and int(row[1]) != expected_ver:
+                return False, (bytes(row[0]), int(row[1]))
+            new_ver = time.time_ns() // 1000
+            cur.execute(
+                "INSERT INTO rc_backup(id,data,updated) VALUES(1,%s,%s) "
+                "ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data, updated=EXCLUDED.updated",
+                (data, new_ver))
+        conn.commit()
+        return True, new_ver
+    finally:
+        conn.close()
+
+
+def _snapshot():
+    src = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        return src.serialize()
+    finally:
+        src.close()
+
+
+def _write_local(data):
+    tmp = DB_PATH + ".restore"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, DB_PATH)
+
+
+def _cloud_push():
+    global _cloud_timer, _cloud_ver
+    with _cloud_lock:
+        _cloud_timer = None
+        try:
+            ok, res = _cloud_save(_snapshot(), _cloud_ver)
+            if ok:
+                _cloud_ver = res
+            else:
+                # نسخة ثانية من السيرفر كتبت قبلنا: نعتمد نسختها بدل ما نكتب فوقها بنسخة قديمة
+                data, ver = res
+                _write_local(data)
+                _cloud_ver = ver
+                print("[حفظ سحابي] تعارض: اعتمدت النسخة الأحدث من السحابة", flush=True)
+        except Exception as e:  # لا نوقف السيرفر، نحاول مرة ثانية عند التعديل القادم
+            print("[حفظ سحابي] فشل:", e, flush=True)
+
+
+def _cloud_dirty():
+    global _cloud_timer
+    if not _cloud_enabled:
+        return
+    with _cloud_lock:
+        if _cloud_timer is None:
+            _cloud_timer = threading.Timer(1.5, _cloud_push)
+            _cloud_timer.daemon = True
+            _cloud_timer.start()
+
+
+def _cloud_flush():
+    if _cloud_enabled and _cloud_timer is not None:
+        _cloud_timer.cancel()
+        _cloud_push()
+
+
+def _cloud_start():
+    """عند الإقلاع: استعد القاعدة من السحابة. لو فشل نوقف الإقلاع بدل ما نكتب فوق نسخة سليمة بقاعدة فاضية."""
+    global _cloud_enabled, _cloud_ver
+    if not CLOUD_URL:
+        return
+    try:
+        data, _cloud_ver = _cloud_load()
+    except Exception as e:
+        raise SystemExit(f"[حفظ سحابي] تعذر الاتصال بقاعدة DATABASE_URL: {e}")
+    if data:
+        _write_local(data)
+        print(f"[حفظ سحابي] استُعيدت القاعدة ({len(data)} بايت)", flush=True)
+    else:
+        print("[حفظ سحابي] لا توجد نسخة سابقة، قاعدة جديدة", flush=True)
+    _cloud_enabled = True
+    atexit.register(_cloud_flush)
+
+
+def _prepare_path():
+    """ينشئ مجلد القاعدة لو ناقص. لو ما قدر (مسار غير قابل للكتابة) يرجع لمسار مؤقت مع تنبيه واضح."""
+    global DB_PATH
+    folder = os.path.dirname(DB_PATH) or "."
+    try:
+        os.makedirs(folder, exist_ok=True)
+        probe = os.path.join(folder, ".rc_write_test")
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+    except OSError as e:
+        fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), "licenses.db")
+        print(f"[تنبيه] تعذر استخدام مسار القاعدة {DB_PATH} ({e}). استخدمت {fallback} — "
+              "على الاستضافة هذا مؤقت وتنمسح الحسابات عند إعادة التشغيل! ركّب Disk واضبط RC_DB عليه.", flush=True)
+        DB_PATH = fallback
+    print(f"[قاعدة البيانات] {DB_PATH}", flush=True)
+
+
 def init_db():
+    _prepare_path()
+    _cloud_start()
     with db() as c:
         c.execute(
             """CREATE TABLE IF NOT EXISTS licenses(
@@ -60,6 +206,7 @@ def init_db():
             if col not in have:
                 c.execute(f"ALTER TABLE licenses ADD COLUMN {col} TEXT")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_license_username ON licenses(username)")
+    _cloud_dirty()
 
 
 # ---------------------------------------------------------------- تنسيق المدخلات
