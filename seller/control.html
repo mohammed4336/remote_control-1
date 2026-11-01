@@ -587,9 +587,54 @@ function backToLogin(info){
   resetScreenView();
 }
 
+let resuming = false, noResume = false, wakeLock = null;
+async function keepAwake(on){
+  try{
+    if(on && 'wakeLock' in navigator && !wakeLock){
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', ()=>{ wakeLock = null; });
+    }else if(!on && wakeLock){ await wakeLock.release(); wakeLock = null; }
+  }catch(e){ wakeLock = null; }
+}
+function leaveControl(){
+  authed = false; resuming = false;
+  controlScreen.style.display = 'none';
+  connectScreen.style.display = 'flex';
+  keepAwake(false);
+  resetScreenView();
+}
+function tryResume(){
+  if(resuming || noResume || !lastCreds.password) return false;
+  resuming = true;
+  (async ()=>{
+    for(let i = 1; i <= 25 && resuming; i++){
+      try{
+        await openWs();
+        send({type:'login', ...lastCreds, token: acc ? acc.token : ''});
+        return;
+      }catch(e){ await new Promise(r=> setTimeout(r, Math.min(1000 * i, 4000))); }
+    }
+    if(resuming){ resuming = false; backToLogin(); setErr('تعذر إعادة الاتصال، سجّل دخولك من جديد'); }
+  })();
+  return true;
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState !== 'visible') return;
+  const inControl = controlScreen.style.display === 'flex';
+  if(inControl){
+    keepAwake(true);
+    if(!ws || ws.readyState !== 1){ authed = false; showToast('إعادة الاتصال…'); tryResume(); }
+  }
+});
+
 function onClose(sock){
   if(sock !== ws) return;
-  if(authed){ showToast('انقطع الاتصال'); backToLogin(); }
+  if(resuming) return;
+  if(authed){
+    authed = false;
+    if(!noResume && lastCreds.password){ showToast('انقطع الاتصال، جاري إعادة الاتصال…'); tryResume(); }
+    else { showToast('انقطع الاتصال'); backToLogin(); }
+  }
   else if(currentStep === 'stepPc'){ backToLogin(); setErr('انقطع الاتصال بالسيرفر'); }
 }
 
@@ -628,10 +673,13 @@ function onMessage(ev){
     else if(!acc){ /* دخول بدون توكن محفوظ لا يصير: السيرفر يطلب رمز */ }
     $('loginPass').value = ''; $('dOtp').value = ''; $('dSecret').value = '';
     setInfo('');
+    noResume = false;
+    if(resuming){ send({type:'connect_pc'}); return; }
     showStep('stepPc');
     renderPc(msg.pc);
 
   }else if((t === 'signup_result' || t === 'login_result') && !ok){
+    if(resuming){ leaveControl(); backToLogin(); }
     BTNS.forEach(id=> setBusy($(id), false));
     if(msg.reason === 'otp_expired' || msg.reason === 'too_many_attempts'){
       showStep(currentStep === 'stepSignupOtp' ? 'stepSignup' : 'stepLogin');
@@ -644,7 +692,8 @@ function onMessage(ev){
   }else if(t === 'auth_result'){
     setBusy($('connectPcBtn'), false);
     if(msg.ok){
-      authed = true;
+      authed = true; resuming = false; noResume = false;
+      keepAwake(true);
       ipLabel.textContent = acc ? acc.username : '';
       connectScreen.style.display = 'none';
       controlScreen.style.display = 'flex';
@@ -653,6 +702,7 @@ function onMessage(ev){
       send({type:'stream', on:true});
       $('streamToggleLbl').textContent = 'إيقاف البث';
     }else{
+      if(resuming){ leaveControl(); showStep('stepPc'); showToast('الكمبيوتر غير متصل حاليًا'); }
       if(msg.reason === 'agent_offline') renderPc({online:false, name:$('pcName').textContent});
       setErr(failText(msg));
     }
@@ -662,9 +712,11 @@ function onMessage(ev){
   }else if(t === 'agent_online'){
     if(authed) showToast('الكمبيوتر اتصل'); else renderPc({online:true, name: msg.name || $('pcName').textContent});
   }else if(t === 'kicked'){
+    noResume = true;
     showToast('دخل جوال ثاني بنفس الحساب');
     if(!authed) backToLogin('دخل جوال ثاني بنفس الحساب');
   }else if(t === 'license_ended'){
+    noResume = true;
     showToast('انتهى الحساب أو تم إيقافه');
     if(!authed) backToLogin('انتهى الحساب أو تم إيقافه');
   }else if(t === 'frame'){
@@ -887,24 +939,30 @@ document.querySelectorAll('[data-sys]').forEach(btn=>{
   });
 });
 
-/* اضغط مطولاً للإطفاء/إعادة التشغيل */
+/* اضغط مطولاً للإطفاء/إعادة التشغيل (pointer events + منع قائمة الضغط المطوّل في آيفون) */
 document.querySelectorAll('.hold-btn').forEach(btn=>{
   let timer=null;
+  btn.style.webkitTouchCallout = 'none';
+  btn.style.webkitUserSelect = 'none';
+  btn.style.userSelect = 'none';
+  btn.style.touchAction = 'manipulation';
   const start = ()=>{
+    clearTimeout(timer);
     btn.classList.add('filling');
     timer = setTimeout(()=>{
+      timer = null;
       send({type:'system', action: btn.dataset.hold});
       showToast('تم الإرسال');
       btn.classList.remove('filling');
     }, 1100);
   };
   const cancel = ()=>{
-    clearTimeout(timer);
+    clearTimeout(timer); timer = null;
     btn.classList.remove('filling');
   };
-  btn.addEventListener('touchstart', start, {passive:true});
-  btn.addEventListener('touchend', cancel, {passive:true});
-  btn.addEventListener('touchcancel', cancel, {passive:true});
+  btn.addEventListener('pointerdown', start);
+  ['pointerup','pointerleave','pointercancel'].forEach(ev=> btn.addEventListener(ev, cancel));
+  btn.addEventListener('contextmenu', e=> e.preventDefault());
 });
 </script>
 </body>
