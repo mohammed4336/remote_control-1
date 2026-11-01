@@ -721,6 +721,7 @@ function onMessage(ev){
     if(!authed) backToLogin('انتهى الحساب أو تم إيقافه');
   }else if(t === 'frame'){
     const img = $('padScreenImg');
+    img.onload = img.onerror = ()=> send({type:'frame_ack'});   // الكمبيوتر ما يرسل التالي قبل ما نستلم
     img.src = 'data:image/jpeg;base64,' + msg.data;
     if(img.style.display !== 'block'){
       img.style.display = 'block';
