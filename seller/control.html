@@ -349,6 +349,16 @@
         <div id="pcName" style="font-size:20px;font-weight:700;margin:6px 0">—</div>
         <div id="pcState" style="font-size:14px;opacity:.85"></div>
       </div>
+      <div class="field glass" id="pairBox" style="display:none">
+        <label>ربط الكمبيوتر بحسابك</label>
+        <div style="font-size:12.5px;line-height:1.8;opacity:.85;margin-bottom:10px">
+          ١) حمّل البرنامج على الكمبيوتر وشغّله (ما يحتاج بايثون).<br>
+          ٢) يظهر فيه كود من 8 أرقام، اكتبه هنا.
+        </div>
+        <button class="btn ghost" id="dlBtn" type="button" style="margin-bottom:10px;width:100%;display:block">⬇ تحميل برنامج الكمبيوتر</button>
+        <input id="pairCode" type="tel" inputmode="numeric" maxlength="9" placeholder="0000-0000" dir="ltr" autocomplete="off" style="width:100%;box-sizing:border-box;text-align:center;letter-spacing:5px;font-size:20px;padding:12px;border:1px solid rgba(255,255,255,.16);border-radius:12px;background:rgba(255,255,255,.05)">
+        <button class="btn" id="pairBtn" type="button" style="margin-top:10px;width:100%;display:block">ربط الكمبيوتر</button>
+      </div>
       <button class="btn" id="connectPcBtn">اتصال بالجهاز</button>
       <button class="btn ghost" id="refreshPcBtn">تحديث</button>
       <button class="btn ghost" id="logoutBtn">تسجيل خروج</button>
@@ -529,7 +539,11 @@ const REASONS = {
   otp_expired:'انتهت صلاحية الرمز، اطلب رمزًا جديدًا',
   too_many_attempts:'محاولات خاطئة كثيرة، اطلب رمزًا جديدًا',
   locked:'تم قفل الدخول مؤقتًا بسبب محاولات خاطئة، جرّب بعد 15 دقيقة',
-  agent_offline:'جهازك غير متصل. شغّل البرنامج على الكمبيوتر وتأكد إنه شغّال'
+  agent_offline:'جهازك غير متصل. شغّل البرنامج على الكمبيوتر وتأكد إنه شغّال',
+  bad_pair_code:'الكود غير صحيح أو انتهت صلاحيته. تأكد من الكود الظاهر في الكمبيوتر',
+  not_logged_in:'سجّل دخولك أول',
+  device_mismatch:'حسابك مربوط بكمبيوتر ثاني. تواصل مع البائع لنقله',
+  invalid:'الحساب غير موجود'
 };
 const STEP_SUB = {
   stepLogin:'سجّل دخولك للتحكم بجهازك.',
@@ -540,7 +554,7 @@ const STEP_SUB = {
   stepPc:'جهازك المربوط بحسابك.'
 };
 const STEPS = Object.keys(STEP_SUB);
-const BTNS = ['loginBtn','sendSignupOtpBtn','signupVerifyBtn','credsBtn','newDeviceBtn','connectPcBtn'];
+const BTNS = ['loginBtn','sendSignupOtpBtn','signupVerifyBtn','credsBtn','newDeviceBtn','connectPcBtn','pairBtn'];
 
 let acc = loadAcc();
 let lastCreds = {username:'', password:''};
@@ -575,6 +589,7 @@ function renderPc(pc){
   $('pcName').textContent = (pc && pc.name) ? pc.name : 'جهازك';
   $('pcState').textContent = pcOnline ? '🟢 متصل ومستعد' : '⚪ غير متصل — شغّل البرنامج على الكمبيوتر';
   $('connectPcBtn').disabled = !pcOnline;
+  $('pairBox').style.display = pcOnline ? 'none' : '';
 }
 function backToLogin(info){
   authed = false;
@@ -609,7 +624,7 @@ function tryResume(){
   (async ()=>{
     for(let i = 1; i <= 25 && resuming; i++){
       try{
-        await openWs();
+        await openWs(10000);
         send({type:'login', ...lastCreds, token: acc ? acc.token : ''});
         return;
       }catch(e){ await new Promise(r=> setTimeout(r, Math.min(1000 * i, 4000))); }
@@ -686,6 +701,18 @@ function onMessage(ev){
     }
     setErr(failText(msg));
 
+  }else if(t === 'pair_result'){
+    setBusy($('pairBtn'), false);
+    if(ok){
+      $('pairCode').value = '';
+      setErr('');
+      showToast('تم ربط الكمبيوتر ✅');
+      setInfo('تم ربط ' + (msg.name || 'الكمبيوتر') + ' بحسابك. ثواني ويظهر متصل.');
+      setTimeout(()=> setInfo(''), 6000);
+    }else{
+      setErr(failText(msg));
+    }
+
   }else if(t === 'pc_status'){
     renderPc(msg);
 
@@ -731,26 +758,47 @@ function onMessage(ev){
   }
 }
 
-function openWs(){
+function openWs(timeoutMs){
   return new Promise((resolve, reject)=>{
     if(ws && ws.readyState === 1){ resolve(ws); return; }
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    let sock;
+    let sock, settled = false;
     try{ sock = new WebSocket(`${scheme}://${location.host}/ws`); }
     catch(e){ reject(e); return; }
     ws = sock;
-    sock.onopen = ()=> resolve(sock);
-    sock.onerror = ()=> reject(new Error('ws'));
-    sock.onclose = ()=> onClose(sock);
+    const giveUp = (why)=>{
+      if(settled) return;
+      settled = true; clearTimeout(tm);
+      sock._dead = true;                       // onClose يتجاهل المحاولات الفاشلة
+      try{ sock.close(); }catch(e){}
+      reject(new Error(why));
+    };
+    const tm = setTimeout(()=> giveUp('timeout'), timeoutMs || 10000);
+    sock.onopen = ()=>{ if(settled) return; settled = true; clearTimeout(tm); resolve(sock); };
+    sock.onerror = ()=> giveUp('ws');
+    sock.onclose = ()=>{ if(!settled){ giveUp('closed'); return; } if(!sock._dead) onClose(sock); };
     sock.onmessage = onMessage;
   });
+}
+
+/* الاستضافة المجانية تنام بعد فترة وتحتاج نص دقيقة تصحى: نعيد المحاولة مع رسالة واضحة بدل ما يعلق */
+async function connectWithRetry(){
+  const MAX = 8;
+  for(let i = 1; i <= MAX; i++){
+    try{ const sock = await openWs(i === 1 ? 7000 : 15000); setInfo(''); return sock; }
+    catch(e){
+      if(i === MAX) throw e;
+      setInfo('السيرفر كان نايم، جاري تشغيله… قد ياخذ حتى دقيقة (محاولة ' + i + ' من ' + (MAX - 1) + ')');
+      await new Promise(r=> setTimeout(r, 2500));
+    }
+  }
 }
 
 async function go(btnId, payload){
   setErr(''); setInfo('');
   setBusy($(btnId), true);
-  try{ await openWs(); send(payload); }
-  catch(e){ setBusy($(btnId), false); setErr('تعذر الاتصال بالسيرفر'); }
+  try{ await connectWithRetry(); send(payload); }
+  catch(e){ setBusy($(btnId), false); setInfo(''); setErr('تعذر الاتصال بالسيرفر. تأكد من النت وحاول مرة ثانية'); }
 }
 
 document.querySelectorAll('[data-back]').forEach(b=>
@@ -796,6 +844,16 @@ $('newDeviceBtn').addEventListener('click', ()=>{
   go('newDeviceBtn', {type:'login_verify', ...lastCreds, otp, secret});
 });
 
+$('pairCode').addEventListener('input', ()=>{
+  const d = $('pairCode').value.replace(/\D/g,'').slice(0,8);
+  $('pairCode').value = d.length > 4 ? d.slice(0,4) + '-' + d.slice(4) : d;
+});
+$('dlBtn').addEventListener('click', ()=>{ location.href = '/download/agent.exe'; });
+$('pairBtn').addEventListener('click', ()=>{
+  const code = $('pairCode').value.replace(/\D/g,'');
+  if(code.length !== 8){ setErr('اكتب الكود المكوّن من 8 أرقام الظاهر في الكمبيوتر'); return; }
+  go('pairBtn', {type:'pair_confirm', code});
+});
 $('connectPcBtn').addEventListener('click', ()=> go('connectPcBtn', {type:'connect_pc'}));
 $('refreshPcBtn').addEventListener('click', ()=>{ send({type:'pc_status'}); });
 $('logoutBtn').addEventListener('click', ()=>{ if(ws) try{ ws.close(); }catch(e){} backToLogin(); });
