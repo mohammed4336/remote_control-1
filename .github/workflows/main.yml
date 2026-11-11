@@ -22,7 +22,9 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --onefile --noconsole agent.py
+         $agent = Get-ChildItem -Path . -Filter agent.py -Recurse | Select-Object -First 1
+if (-not $agent) { throw "agent.py not found" }
+pyinstaller --onefile --noconsole $agent.FullName
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
