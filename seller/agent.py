@@ -315,12 +315,37 @@ async def run(relay_addr: str, username: str, agent_token: str, password: str = 
                             except json.JSONDecodeError:
                                 continue
                             t = msg.get("type")
-                            if t == "pair_code":
-                                if not msg.get("ok"):
-                                    print("Pairing request failed:", REASONS.get(msg.get("reason"), msg.get("reason")))
-                                    wait = 30
-                                    break
-                                show_pair_code(msg["code"], int(msg.get("ttl", 600)))
+                            
+if t == "pair_code":
+    if msg.get("ok") is False:
+        reason = msg.get("reason", "unknown")
+        print("Pairing request failed:", REASONS.get(reason, reason))
+        wait = 30
+        break
+
+    code = str(msg.get("code", ""))
+
+    if len(code) != 8 or not code.isdigit():
+        print("Invalid pairing code received.")
+        wait = 30
+        break
+
+    show_pair_code(code, int(msg.get("ttl", 600)))
+
+    if refresh_task:
+        refresh_task.cancel()
+
+    refresh_task = asyncio.create_task(
+        refresh_code(int(msg.get("ttl", 600)))
+    )
+    continue
+
+if t == "pair_error":
+    reason = msg.get("reason", "unknown")
+    print("Pairing request failed:", REASONS.get(reason, reason))
+    wait = 30
+    break
+
                                 if refresh_task:
                                     refresh_task.cancel()
                                 refresh_task = asyncio.create_task(refresh_code(int(msg.get("ttl", 600))))
