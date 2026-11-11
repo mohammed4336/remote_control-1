@@ -17,32 +17,30 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install all dependencies
+      - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install pyinstaller aiohttp pyautogui Pillow
 
       - name: Verify dependencies
+        shell: pwsh
         run: |
-          python -c "import aiohttp; import pyautogui; from PIL import Image, ImageDraw, ImageGrab; print('ALL DEPENDENCIES OK')"
+          python -c "import aiohttp, pyautogui; from PIL import Image, ImageDraw, ImageGrab; print('ALL DEPENDENCIES OK')"
 
       - name: Locate agent.py
         shell: pwsh
         run: |
-          $agent = Get-ChildItem -Path . -Filter agent.py -Recurse -File |
-            Select-Object -First 1
-
+          $agent = Get-ChildItem -Path . -Filter agent.py -Recurse -File | Select-Object -First 1
           if (-not $agent) {
             throw "agent.py was not found"
           }
-
-          Write-Host "Found: $($agent.FullName)"
           "AGENT_PATH=$($agent.FullName)" >> $env:GITHUB_ENV
 
       - name: Build EXE
         shell: pwsh
         run: |
-          pyinstaller --clean --noconfirm --onefile --console --name agent --collect-all aiohttp --collect-all pyautogui --collect-all PIL "$env:AGENT_PATH"
+          python -m PyInstaller --clean --noconfirm --onefile --console --name agent --collect-all aiohttp --collect-all pyautogui --collect-all PIL "$env:AGENT_PATH"
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
