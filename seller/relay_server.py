@@ -45,6 +45,9 @@ AUTH_LOCK_SECONDS = 900
 rooms = {}
 ws_info = {}
 otp_state = {}
+# أكواد ربط الكمبيوتر المؤقتة
+pending_pairs = {}
+PAIR_TTL = 600  # صلاحية الكود 10 دقائق
 buckets = defaultdict(list)
 auth_fails = defaultdict(list)
 
@@ -518,6 +521,181 @@ async def kick_control(code, except_ws=None):
         await safe_send(old, {"type": "kicked"})
         await safe_close(old)
 
+# ---------------------------------------------------------------- ربط الكمبيوتر بالجوال
+
+def clean_pair_codes():
+    now = time.time()
+
+    for code, data in list(pending_pairs.items()):
+        if now > data["exp"] or data["ws"].closed:
+            pending_pairs.pop(code, None)
+
+
+async def on_pair_request(ws, ip, msg):
+    # لا تسمح بإعادة طلب كود من Agent مسجل بالفعل
+    if ws_info.get(ws):
+        return await safe_send(ws, {
+            "type": "pair_error",
+            "reason": "already_registered"
+        })
+
+    if over("pair_request", ip, 10, 600):
+        return await safe_send(ws, {
+            "type": "pair_error",
+            "reason": "rate_limited"
+        })
+
+    hwid = str(msg.get("hwid", "")).strip()[:200]
+    name = str(msg.get("name", "Computer")).strip()[:60]
+
+    if not hwid:
+        return await safe_send(ws, {
+            "type": "pair_error",
+            "reason": "bad_device"
+        })
+
+    record("pair_request", ip)
+    clean_pair_codes()
+
+    # حذف أي كود سابق لهذا الاتصال
+    for old_code, data in list(pending_pairs.items()):
+        if data["ws"] is ws:
+            pending_pairs.pop(old_code, None)
+
+    # إنشاء كود عشوائي من 8 أرقام
+    code = None
+
+    for _ in range(20):
+        candidate = f"{secrets.randbelow(100_000_000):08d}"
+
+        if candidate not in pending_pairs:
+            code = candidate
+            break
+
+    if not code:
+        return await safe_send(ws, {
+            "type": "pair_error",
+            "reason": "server_busy"
+        })
+
+    pending_pairs[code] = {
+        "ws": ws,
+        "hwid": hwid,
+        "name": name,
+        "ip": ip,
+        "exp": time.time() + PAIR_TTL
+    }
+
+    print(
+        f"[PAIR] New pairing request: {name} ({code})",
+        flush=True
+    )
+
+    await safe_send(ws, {
+        "type": "pair_code",
+        "code": code,
+        "ttl": PAIR_TTL
+    })
+
+
+async def on_pair_confirm(ws, ip, msg):
+    info = session_of(ws, "authed")
+
+    if not info:
+        return await fail(
+            ws, "pair_result", "bad_credentials"
+        )
+
+    code = info[0]
+
+    # الترخيص مأخوذ من جلسة الجوال، وليس من طلب المستخدم
+    row = ldb.get_license(code)
+
+    if not row:
+        return await fail(
+            ws, "pair_result", "license_not_found"
+        )
+
+    ok, reason = ldb.usable(row)
+
+    if not ok:
+        return await fail(
+            ws, "pair_result", reason
+        )
+
+    if not row.get("phone_token_hash"):
+        return await fail(
+            ws, "pair_result", "phone_not_bound"
+        )
+
+    pair_code = re.sub(
+        r"\D", "", str(msg.get("code", ""))
+    )
+
+    if not re.fullmatch(r"\d{8}", pair_code):
+        return await fail(
+            ws, "pair_result", "bad_pair_code"
+        )
+
+    clean_pair_codes()
+
+    pairing = pending_pairs.pop(pair_code, None)
+
+    if not pairing:
+        return await fail(
+            ws, "pair_result", "bad_pair_code"
+        )
+
+    agent_ws = pairing["ws"]
+
+    if agent_ws.closed:
+        return await fail(
+            ws, "pair_result", "agent_offline"
+        )
+
+    # ربط بصمة الجهاز بالترخيص
+    machine_hash = _h("hw:" + pairing["hwid"])
+
+    bound, why = ldb.bind_agent(
+        code,
+        machine_hash
+    )
+
+    if not bound:
+        return await fail(
+            ws, "pair_result", why or "device_mismatch"
+        )
+
+    # إنشاء توكن خاص بالكمبيوتر
+    agent_token = secrets.token_urlsafe(32)
+
+    ldb.set_agent_token(code, agent_token)
+
+    ldb.set_agent_info(
+        code,
+        pairing["ip"],
+        pairing["name"]
+    )
+
+    # إرسال بيانات الربط إلى Agent
+    await safe_send(agent_ws, {
+        "type": "pair_done",
+        "username": row["username"],
+        "agent_token": agent_token
+    })
+
+    print(
+        f"[PAIR] Successfully paired: {row['username']} / {pairing['name']}",
+        flush=True
+    )
+
+    await reply(
+        ws,
+        "pair_result",
+        ok=True,
+        name=pairing["name"]
+    )
+
 
 # ---------------------------------------------------------------- تسجيل الـ agent
 
@@ -610,39 +788,15 @@ async def on_register_agent(ws, ip, msg):
 
 
 async def cleanup(ws):
+    # حذف أي أكواد ربط مرتبطة بهذا الكمبيوتر
+    for code, data in list(pending_pairs.items()):
+        if data["ws"] is ws:
+            pending_pairs.pop(code, None)
+
     info = ws_info.pop(ws, None)
 
     if not info:
         return
-
-    code, role = info
-    r = rooms.get(code)
-
-    if not r:
-        return
-
-    if role == "agent" and r.get("agent") is ws:
-        r["agent"] = None
-
-        for w in (r.get("control"), r.get("pending")):
-            if w:
-                await safe_send(w, {"type": "agent_offline"})
-
-    elif role == "authed" and r.get("pending") is ws:
-        r["pending"] = None
-
-    elif role == "control" and r.get("control") is ws:
-        r["control"] = None
-
-        if r.get("agent"):
-            await safe_send(
-                r["agent"],
-                {"type": "stream", "on": False}
-            )
-            await safe_send(
-                r["agent"],
-                {"type": "controller", "connected": False}
-            )
 
 
 async def forward(ws, msg):
@@ -665,6 +819,8 @@ async def forward(ws, msg):
 
 
 HANDLERS = {
+    "pair_request": on_pair_request,
+    "pair_confirm": on_pair_confirm,
     "signup_start": on_signup_start,
     "signup_verify": on_signup_verify,
     "set_credentials": on_set_credentials,
