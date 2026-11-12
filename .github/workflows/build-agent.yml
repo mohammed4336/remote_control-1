@@ -21,12 +21,12 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller aiohttp pyautogui Pillow
+          python -m pip install pyinstaller aiohttp pyautogui Pillow soundcard numpy
 
       - name: Verify dependencies
         shell: pwsh
         run: |
-          python -c "import aiohttp, pyautogui; from PIL import Image, ImageDraw, ImageGrab; print('ALL DEPENDENCIES OK')"
+          python -c "import aiohttp, pyautogui, soundcard, numpy; from PIL import Image, ImageDraw, ImageGrab; print('ALL DEPENDENCIES OK')"
 
       - name: Locate agent.py
         shell: pwsh
@@ -40,7 +40,7 @@ jobs:
       - name: Build EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --clean --noconfirm --onefile --console --name agent --collect-all aiohttp --collect-all pyautogui --collect-all PIL "$env:AGENT_PATH"
+          python -m PyInstaller --clean --noconfirm --onefile --console --name agent --collect-all aiohttp --collect-all pyautogui --collect-all PIL --collect-all soundcard --collect-all numpy --hidden-import=soundcard.mediafoundation "$env:AGENT_PATH"
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
