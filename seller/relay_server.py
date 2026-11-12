@@ -1302,42 +1302,17 @@ async def health(request):
 # تحميل برنامج Agent
 # ----------------------------------------------------------------
 
+
 async def download_agent(request):
-    path = os.path.join(
-        BASE_DIR,
-        "agent.exe"
+    download_url = (
+        "https://github.com/mohammed4336/remote_control-1/"
+        "releases/download/v1.0.0/agent.exe"
     )
 
-    print(
-        "[DOWNLOAD] BASE_DIR:",
-        BASE_DIR,
-        flush=True
+    raise web.HTTPFound(
+        location=download_url
     )
 
-    print(
-        "[DOWNLOAD] FILE:",
-        path,
-        flush=True
-    )
-
-    print(
-        "[DOWNLOAD] EXISTS:",
-        os.path.isfile(path),
-        flush=True
-    )
-
-    if not os.path.isfile(path):
-        raise web.HTTPNotFound(
-            text="agent.exe not found on server"
-        )
-
-    return web.FileResponse(
-        path,
-        headers={
-            "Content-Disposition": 'attachment; filename="agent.exe"',
-            "Cache-Control": "no-cache"
-        }
-    )
 
 
 # ----------------------------------------------------------------
