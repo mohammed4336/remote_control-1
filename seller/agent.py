@@ -296,12 +296,14 @@ def grab_frame(width, quality):
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+
 async def frame_sender(ws):
-    """إرسال إطارات الشاشة مع التحكم بسرعة وجودة البث."""
+    """إرسال الشاشة المختارة مع دعم تعدد الشاشات."""
     loop = asyncio.get_running_loop()
 
     failing = False
     width, quality = 800, 60
+    selected_monitor = 0
 
     while True:
         if not streaming["on"]:
@@ -331,6 +333,7 @@ async def frame_sender(ws):
                     grab_frame,
                     width,
                     quality,
+                    selected_monitor,
                 ),
                 timeout=4,
             )
@@ -339,6 +342,7 @@ async def frame_sender(ws):
                 ws.send_json({
                     "type": "frame",
                     "data": data,
+                    "monitor": selected_monitor,
                 }),
                 timeout=6,
             )
@@ -351,10 +355,7 @@ async def frame_sender(ws):
 
         except Exception as e:
             if not failing:
-                print(
-                    "Screen capture paused (is the PC locked? unlock it):",
-                    e,
-                )
+                print("Screen capture error:", e, flush=True)
 
             failing = True
             await asyncio.sleep(0.5)
