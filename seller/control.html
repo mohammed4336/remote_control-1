@@ -122,9 +122,9 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
 }
 .statusbar{
   display:flex;align-items:center;justify-content:space-between;
-  padding:10px 14px;border-radius:16px;flex:0 0 auto;
+  gap:8px;padding:10px 14px;border-radius:16px;flex:0 0 auto;
 }
-.status-left{display:flex;align-items:center;gap:9px;}
+.status-left{display:flex;align-items:center;gap:9px;min-width:0;}
 .status-dot{
   width:9px;height:9px;border-radius:50%;background:var(--teal);
   box-shadow:0 0 10px 2px rgba(87,240,201,.8);
@@ -138,6 +138,31 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
   border:1px solid var(--panel-b);
   background:rgba(255,255,255,.03);
   display:flex;align-items:center;justify-content:center;font-size:16px;
+  color:var(--text);flex:0 0 auto;
+}
+
+/* اختيار الشاشة */
+.monitor-select{
+  min-width:100px;
+  max-width:155px;
+  height:36px;
+  padding:0 9px;
+  border-radius:11px;
+  border:1px solid rgba(87,240,201,.25);
+  background:#111a22;
+  color:var(--teal);
+  font-family:'Tajawal',sans-serif;
+  font-size:12px;
+  font-weight:700;
+  outline:none;
+  direction:rtl;
+}
+.monitor-select option{
+  background:#111a22;
+  color:#eaeef4;
+}
+.monitor-select:disabled{
+  opacity:.5;
 }
 
 /* التاتش باد */
@@ -299,6 +324,17 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
   border-top-color:var(--teal);animation:spin .8s linear infinite;
 }
 @keyframes spin{to{transform:rotate(360deg);}}
+
+@media(max-width:390px){
+  #controlScreen{padding:9px;gap:9px;}
+  .statusbar{padding:8px 9px;}
+  .monitor-select{max-width:112px;min-width:88px;font-size:11px;}
+  .status-title{font-size:12px;}
+  .status-sub{font-size:10px;}
+  .dock{gap:2px;padding:8px 4px;}
+  .dock-btn .ic{font-size:16px;}
+  .dock-btn .lb{font-size:8.5px;}
+}
 </style>
 </head>
 
@@ -316,7 +352,6 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
 
   <div class="form-stack">
 
-    <!-- تسجيل الدخول -->
     <div class="step" id="stepLogin">
       <div class="field glass">
         <label>اسم المستخدم</label>
@@ -330,7 +365,6 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
       <button class="btn ghost" id="goSignupBtn">إنشاء حساب جديد</button>
     </div>
 
-    <!-- إنشاء الحساب -->
     <div class="step" id="stepSignup">
       <div class="field glass">
         <label>جوالك أو إيميلك (يوصلك عليه رمز التحقق)</label>
@@ -344,7 +378,6 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
       <button class="btn ghost" data-back="stepLogin">رجوع</button>
     </div>
 
-    <!-- رمز التسجيل -->
     <div class="step" id="stepSignupOtp">
       <div class="field glass">
         <label id="sOtpLabel">رمز التحقق</label>
@@ -354,7 +387,6 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
       <button class="btn ghost" data-back="stepSignup">رجوع</button>
     </div>
 
-    <!-- بيانات الحساب -->
     <div class="step" id="stepCreds">
       <div class="field glass">
         <label>اسم مستخدم (إنجليزي، 3-20، يبدأ بحرف)</label>
@@ -367,7 +399,6 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
       <button class="btn" id="credsBtn">إنشاء الحساب</button>
     </div>
 
-    <!-- جوال جديد -->
     <div class="step" id="stepNewDevice">
       <div class="field glass">
         <label id="dOtpLabel">رمز التحقق</label>
@@ -381,7 +412,6 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
       <button class="btn ghost" data-back="stepLogin">رجوع</button>
     </div>
 
-    <!-- الكمبيوتر -->
     <div class="step" id="stepPc">
       <div class="field glass" style="text-align:center">
         <label>جهازك</label>
@@ -421,6 +451,11 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
         <div class="status-sub" id="ipLabel">—</div>
       </div>
     </div>
+
+    <select id="monitorSelect" class="monitor-select" disabled aria-label="اختيار الشاشة">
+      <option value="">جاري تحميل الشاشات</option>
+    </select>
+
     <button class="icon-btn" id="disconnectBtn">⏻</button>
   </div>
 
@@ -447,9 +482,9 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
     <button class="dock-btn" data-media="mute"><span class="ic">🔇</span><span class="lb">كتم</span></button>
     <button class="dock-btn" data-action="power"><span class="ic">🔌</span><span class="lb">الطاقة</span></button>
     <button class="dock-btn" id="audioToggleBtn">
-  <span class="ic">🎧</span>
-  <span class="lb" id="audioToggleLbl">تشغيل الصوت</span>
-</button>
+      <span class="ic">🎧</span>
+      <span class="lb" id="audioToggleLbl">تشغيل الصوت</span>
+    </button>
   </div>
 </div>
 
@@ -514,6 +549,79 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
 let ws = null;
 let authed = false;
 let streaming = false;
+
+/* بيانات الشاشات */
+let monitorsList = [];
+let selectedMonitorIndex = 0;
+const monitorSelect = document.getElementById('monitorSelect');
+
+function requestMonitors(){
+  if(!authed) return;
+  monitorSelect.disabled = true;
+  monitorSelect.innerHTML = '<option value="">جاري تحميل الشاشات...</option>';
+  send({type:'get_monitors'});
+}
+
+function renderMonitors(monitors){
+  monitorsList = Array.isArray(monitors) ? monitors : [];
+
+  monitorSelect.innerHTML = '';
+
+  if(!monitorsList.length){
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'لا توجد شاشات';
+    monitorSelect.appendChild(option);
+    monitorSelect.disabled = true;
+    return;
+  }
+
+  monitorsList.forEach((monitor,i)=>{
+    const index = Number.isInteger(Number(monitor.index))
+      ? Number(monitor.index)
+      : i;
+
+    const option = document.createElement('option');
+    option.value = String(index);
+
+    const name = monitor.name || ('الشاشة '+(index+1));
+    const width = monitor.width || '';
+    const height = monitor.height || '';
+    const resolution = width && height ? ` (${width}×${height})` : '';
+
+    option.textContent = name + resolution;
+    monitorSelect.appendChild(option);
+  });
+
+  const exists = monitorsList.some(m=>Number(m.index)===selectedMonitorIndex);
+
+  if(!exists){
+    selectedMonitorIndex = Number(monitorsList[0].index || 0);
+  }
+
+  monitorSelect.value = String(selectedMonitorIndex);
+  monitorSelect.disabled = false;
+}
+
+monitorSelect.addEventListener('change',()=>{
+  const index = Number(monitorSelect.value);
+
+  if(!Number.isInteger(index) || index<0) return;
+
+  selectedMonitorIndex = index;
+
+  send({
+    type:'select_monitor',
+    index:index
+  });
+
+  showToast('جاري تغيير الشاشة...');
+
+  const img = $('padScreenImg');
+  img.style.display = 'none';
+  $('liveBadge').style.display = 'none';
+  $('padHint').style.opacity = '.7';
+});
 
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
@@ -735,8 +843,6 @@ function tryResume(){
   return true;
 }
 
-/* تم إصلاح الخطأ هنا: لا يوجد قوس زائد بعد tryResume */
-
 function onClose(sock){
   if(sock!==ws) return;
   if(resuming || noResume) return;
@@ -763,7 +869,6 @@ function onMessage(ev){
 
   const t = msg.type;
   const ok = msg.ok!==false;
-  
 
   if(t==='otp_sent'){
     maskedLabel($('sOtpLabel'),'رمز التحقق (أُرسل إلى ',msg.masked);
@@ -871,6 +976,9 @@ function onMessage(ev){
       send({type:'stream',on:true});
       $('streamToggleLbl').textContent = 'إيقاف البث';
 
+      /* طلب قائمة الشاشات بعد نجاح الاتصال */
+      requestMonitors();
+
     }else{
       if(resuming){
         leaveControl();
@@ -888,6 +996,7 @@ function onMessage(ev){
   }else if(t==='agent_offline'){
     if(authed){
       showToast('انقطع جهاز الكمبيوتر عن الوسيط');
+      monitorSelect.disabled = true;
     }else{
       renderPc({online:false,name:$('pcName').textContent});
     }
@@ -895,9 +1004,20 @@ function onMessage(ev){
   }else if(t==='agent_online'){
     if(authed){
       showToast('الكمبيوتر اتصل');
+      requestMonitors();
     }else{
       renderPc({online:true,name:msg.name||$('pcName').textContent});
     }
+
+  }else if(t==='monitors'){
+    renderMonitors(msg.monitors || []);
+
+  }else if(t==='monitor_selected'){
+    selectedMonitorIndex = Number(msg.index || 0);
+    monitorSelect.value = String(selectedMonitorIndex);
+
+    const selected = monitorsList.find(m=>Number(m.index)===selectedMonitorIndex);
+    showToast(selected ? 'تم اختيار '+(selected.name||'الشاشة') : 'تم تغيير الشاشة');
 
   }else if(t==='kicked'){
     noResume = true;
@@ -913,9 +1033,9 @@ function onMessage(ev){
     showToast('انتهى الحساب أو تم إيقافه');
     if(!authed) backToLogin('انتهى الحساب أو تم إيقافه');
 
-    }else if(t==='audio_frame'){
-  playAudioFrame(msg);
-    
+  }else if(t==='audio_frame'){
+    playAudioFrame(msg);
+
   }else if(t==='frame'){
     const img = $('padScreenImg');
     img.onload = img.onerror = ()=>send({type:'frame_ack'});
@@ -1171,6 +1291,11 @@ function resetScreenView(){
   stopAudio();
   streaming = false;
 
+  monitorsList = [];
+  selectedMonitorIndex = 0;
+  monitorSelect.innerHTML = '<option value="">الشاشة</option>';
+  monitorSelect.disabled = true;
+
   const img = document.getElementById('padScreenImg');
   img.style.display = 'none';
   img.src = '';
@@ -1382,7 +1507,8 @@ document.querySelectorAll('.hold-btn').forEach(btn=>{
 
   btn.addEventListener('contextmenu',e=>e.preventDefault());
 });
-  /* استقبال صوت الكمبيوتر مباشرة */
+
+/* استقبال صوت الكمبيوتر مباشرة */
 let audioEnabled = false;
 let audioContext = null;
 let nextAudioTime = 0;
@@ -1480,7 +1606,6 @@ function playAudioFrame(msg){
       nextAudioTime = now + 0.06;
     }
 
-    // منع تراكم التأخير إذا وصل الصوت متأخراً
     if(nextAudioTime - now > 0.5){
       nextAudioTime = now + 0.06;
     }
