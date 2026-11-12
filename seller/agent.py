@@ -1,12 +1,8 @@
 
 # -*- coding: utf-8 -*-
 """
-Agent - يشتغل على كمبيوتر العميل (Windows) وينفّذ أوامر الجوال.
-
-أول تشغيل: يسأل عن كود الترخيص ويحفظه بجانب البرنامج (agent_config.json).
-بعدها يكفي دبل كليك على agent.exe.
-
-الاستخدام اليدوي: python agent.py [رابط_الموقع] [كود_الترخيص]
+Remote Control Agent
+Windows Agent - Multi Monitor + Audio + Licensing
 """
 
 import asyncio
@@ -19,13 +15,19 @@ import platform
 import os
 import sys
 import subprocess
-import soundcard as sc
-import numpy as np
 from ctypes import wintypes
 
 import aiohttp
 import pyautogui
+import soundcard as sc
+import numpy as np
+
 from PIL import Image, ImageDraw, ImageGrab
+
+
+# =========================================================
+# GLOBAL SETTINGS
+# =========================================================
 
 try:
     ctypes.windll.user32.SetProcessDPIAware()
@@ -42,13 +44,179 @@ BASE_DIR = (
 )
 
 CONFIG_PATH = os.path.join(BASE_DIR, "agent_config.json")
+
 DEFAULT_RELAY = "https://remote-control-by-akira.onrender.com"
 
 streaming = {"on": False}
 audio_streaming = {"on": False}
-flow = {"sent": [], "rtt": 0.0}
+selected_monitor = {"index": 0}
 
-# ---------- Unicode keyboard input ----------
+flow = {
+    "sent": [],
+    "rtt": 0.0
+}
+
+
+# =========================================================
+# MONITOR DETECTION
+# =========================================================
+
+def get_monitors():
+    """اكتشاف جميع الشاشات المتصلة بالكمبيوتر."""
+
+    monitors = []
+
+    class RECT(ctypes.Structure):
+        _fields_ = [
+            ("left", wintypes.LONG),
+            ("top", wintypes.LONG),
+            ("right", wintypes.LONG),
+            ("bottom", wintypes.LONG),
+        ]
+
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(
+        wintypes.BOOL,
+        wintypes.HMONITOR,
+        wintypes.HDC,
+        ctypes.POINTER(RECT),
+        wintypes.LPARAM
+    )
+
+    def callback(hMonitor, hdcMonitor, rect_ptr, data):
+        rect = rect_ptr.contents
+
+        monitors.append({
+            "left": rect.left,
+            "top": rect.top,
+            "right": rect.right,
+            "bottom": rect.bottom,
+            "width": rect.right - rect.left,
+            "height": rect.bottom - rect.top,
+        })
+
+        return True
+
+    callback_func = MONITORENUMPROC(callback)
+
+    ctypes.windll.user32.EnumDisplayMonitors(
+        None,
+        None,
+        callback_func,
+        0
+    )
+
+    return monitors
+
+
+# =========================================================
+# SCREEN CAPTURE
+# =========================================================
+
+def draw_cursor(img, scale, monitor=None):
+    """رسم مؤشر الماوس في مكانه الصحيح على الشاشة المختارة."""
+
+    try:
+        pt = wintypes.POINT()
+
+        ctypes.windll.user32.GetCursorPos(
+            ctypes.byref(pt)
+        )
+
+        if monitor:
+            x = (pt.x - monitor["left"]) * scale
+            y = (pt.y - monitor["top"]) * scale
+        else:
+            x = pt.x * scale
+            y = pt.y * scale
+
+        if not (
+            0 <= x < img.size[0]
+            and 0 <= y < img.size[1]
+        ):
+            return
+
+        arrow = [
+            (0, 0),
+            (0, 17),
+            (4, 13),
+            (7, 20),
+            (10, 19),
+            (7, 12),
+            (12, 12)
+        ]
+
+        d = ImageDraw.Draw(img)
+
+        d.polygon(
+            [(x + a, y + b) for a, b in arrow],
+            fill="white",
+            outline="black"
+        )
+
+    except Exception:
+        pass
+
+
+def grab_frame(width, quality, monitor_index=0):
+    """التقاط الشاشة المحددة وضغط الصورة."""
+
+    monitors = get_monitors()
+
+    if not monitors:
+        img = ImageGrab.grab()
+        monitor = None
+
+    else:
+        monitor_index = max(
+            0,
+            min(
+                int(monitor_index),
+                len(monitors) - 1
+            )
+        )
+
+        monitor = monitors[monitor_index]
+
+        img = ImageGrab.grab(
+            bbox=(
+                monitor["left"],
+                monitor["top"],
+                monitor["right"],
+                monitor["bottom"]
+            ),
+            all_screens=True
+        )
+
+    w, h = img.size
+
+    scale = width / w
+
+    img = img.resize(
+        (
+            width,
+            max(1, int(h * scale))
+        ),
+        Image.Resampling.BILINEAR
+    ).convert("RGB")
+
+    draw_cursor(img, scale, monitor)
+
+    buf = io.BytesIO()
+
+    img.save(
+        buf,
+        format="JPEG",
+        quality=quality
+    )
+
+    return base64.b64encode(
+        buf.getvalue()
+    ).decode("ascii")
+
+
+# =========================================================
+# KEYBOARD
+# =========================================================
 
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
@@ -91,8 +259,10 @@ class _INPUT(ctypes.Structure):
 
 
 def type_unicode(text):
-    """يكتب النص حرفًا حرفًا كما هو، ويدعم العربية."""
+    """كتابة النصوص العربية والإنجليزية."""
+
     for ch in text:
+
         if ch in "\r\n":
             if ch == "\n":
                 pyautogui.press("enter")
@@ -101,55 +271,56 @@ def type_unicode(text):
         data = ch.encode("utf-16-le")
 
         for i in range(0, len(data), 2):
-            unit = int.from_bytes(data[i:i + 2], "little")
+
+            unit = int.from_bytes(
+                data[i:i + 2],
+                "little"
+            )
+
             events = []
 
             for flags in (
                 KEYEVENTF_UNICODE,
                 KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
             ):
+
                 inp = _INPUT(type=1)
-                inp.u.ki = _KI(0, unit, flags, 0, 0)
+
+                inp.u.ki = _KI(
+                    0,
+                    unit,
+                    flags,
+                    0,
+                    0
+                )
+
                 events.append(inp)
 
             arr = (_INPUT * 2)(*events)
+
             ctypes.windll.user32.SendInput(
-                2, arr, ctypes.sizeof(_INPUT)
+                2,
+                arr,
+                ctypes.sizeof(_INPUT)
             )
 
 
-def draw_cursor(img, scale):
-    """يرسم مؤشر الماوس فوق صورة الشاشة."""
-    try:
-        pt = wintypes.POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-
-        x, y = pt.x * scale, pt.y * scale
-
-        if not (0 <= x < img.size[0] and 0 <= y < img.size[1]):
-            return
-
-        arrow = [
-            (0, 0), (0, 17), (4, 13),
-            (7, 20), (10, 19), (7, 12), (12, 12)
-        ]
-
-        d = ImageDraw.Draw(img)
-        d.polygon(
-            [(x + a, y + b) for a, b in arrow],
-            fill="white",
-            outline="black",
-        )
-
-    except Exception:
-        pass
-
+# =========================================================
+# POWER ACTIONS
+# =========================================================
 
 def power_action(action):
-    """إطفاء أو إعادة تشغيل أو سكون."""
+
     if action == "sleep":
-        ok = ctypes.windll.powrprof.SetSuspendState(0, 1, 0)
-        print("Sleep requested" if ok else "Sleep failed")
+
+        ok = ctypes.windll.powrprof.SetSuspendState(
+            0, 1, 0
+        )
+
+        print(
+            "Sleep requested" if ok else "Sleep failed"
+        )
+
         return
 
     flag = {
@@ -163,14 +334,19 @@ def power_action(action):
     r = subprocess.run(
         ["shutdown", flag, "/f", "/t", "0"],
         capture_output=True,
-        text=True,
+        text=True
     )
 
     print(
         f"{action}:",
-        "OK" if r.returncode == 0 else (r.stderr or r.stdout).strip()
+        "OK" if r.returncode == 0
+        else (r.stderr or r.stdout).strip()
     )
 
+
+# =========================================================
+# COMMAND MAPS
+# =========================================================
 
 KEY_MAP = {
     "enter": "enter",
@@ -197,9 +373,9 @@ REASONS = {
     "bad_credentials": "Wrong username or password.",
     "revoked": "This account was suspended. Contact the seller.",
     "expired": "This account has expired. Contact the seller.",
-    "pending": "Your account is waiting for the seller to activate it. Retrying every 30 seconds...",
-    "device_mismatch": "This account is already linked to another computer. Contact the seller to move it.",
-    "locked": "Too many wrong attempts. Try again in 15 minutes.",
+    "pending": "Your account is waiting for activation.",
+    "device_mismatch": "This account is linked to another computer.",
+    "locked": "Too many wrong attempts.",
     "rate_limited": "Too many attempts. Wait a few minutes.",
     "bad_request": "Could not request a pairing code.",
 }
@@ -213,99 +389,126 @@ FATAL = {
 }
 
 
+# =========================================================
+# COMMAND HANDLER
+# =========================================================
+
 def handle_command(msg: dict):
+
     t = msg.get("type")
 
     if t == "move":
+
         pyautogui.moveRel(
             float(msg.get("dx", 0)),
             float(msg.get("dy", 0)),
-            duration=0,
+            duration=0
         )
 
     elif t == "click":
+
         button = msg.get("button", "left")
 
-        if button not in ("left", "right", "middle"):
+        if button not in (
+            "left",
+            "right",
+            "middle"
+        ):
             return
 
         if msg.get("double"):
-            pyautogui.doubleClick(button=button)
+            pyautogui.doubleClick(
+                button=button
+            )
         else:
-            pyautogui.click(button=button)
+            pyautogui.click(
+                button=button
+            )
 
     elif t == "scroll":
-        pyautogui.scroll(int(msg.get("dy", 0)))
+
+        pyautogui.scroll(
+            int(msg.get("dy", 0))
+        )
 
     elif t == "key":
-        key = KEY_MAP.get(msg.get("key"))
+
+        key = KEY_MAP.get(
+            msg.get("key")
+        )
+
         if key:
             pyautogui.press(key)
 
     elif t == "type":
-        text = str(msg.get("text", ""))[:500]
+
+        text = str(
+            msg.get("text", "")
+        )[:500]
+
         if text:
             type_unicode(text)
 
     elif t == "media":
-        key = MEDIA_MAP.get(msg.get("action"))
+
+        key = MEDIA_MAP.get(
+            msg.get("action")
+        )
+
         if key:
             pyautogui.press(key)
 
     elif t == "system":
+
         action = msg.get("action")
 
         if action == "lock":
             ctypes.windll.user32.LockWorkStation()
 
-        elif action in ("sleep", "shutdown", "restart"):
+        elif action in (
+            "sleep",
+            "shutdown",
+            "restart"
+        ):
             power_action(action)
 
     elif t == "stream":
-        streaming["on"] = bool(msg.get("on"))
+
+        streaming["on"] = bool(
+            msg.get("on")
+        )
+
         flow["sent"].clear()
 
     elif t == "frame_ack":
+
         if flow["sent"]:
+
             flow["rtt"] = (
                 0.7 * flow["rtt"]
                 + 0.3 * (
-                    asyncio.get_event_loop().time()
+                    asyncio.get_running_loop().time()
                     - flow["sent"].pop(0)
                 )
             )
 
 
-def grab_frame(width, quality):
-    """يلتقط الشاشة ويضغط الصورة."""
-    img = ImageGrab.grab()
-    w, h = img.size
-
-    scale = width / w
-
-    img = img.resize(
-        (width, max(1, int(h * scale))),
-        Image.BILINEAR,
-    ).convert("RGB")
-
-    draw_cursor(img, scale)
-
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=quality)
-
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
+# =========================================================
+# SCREEN STREAM
+# =========================================================
 
 async def frame_sender(ws):
-    """إرسال الشاشة المختارة مع دعم تعدد الشاشات."""
+    """إرسال الشاشة المختارة مع تحسين جودة البث."""
+
     loop = asyncio.get_running_loop()
 
     failing = False
-    width, quality = 800, 60
-    selected_monitor = 0
+
+    width = 800
+    quality = 60
 
     while True:
+
         if not streaming["on"]:
             flow["sent"].clear()
             await asyncio.sleep(0.2)
@@ -327,63 +530,110 @@ async def frame_sender(ws):
         t0 = loop.time()
 
         try:
+
+            monitor_index = selected_monitor["index"]
+
             data = await asyncio.wait_for(
                 loop.run_in_executor(
                     None,
                     grab_frame,
                     width,
                     quality,
-                    selected_monitor,
+                    monitor_index
                 ),
-                timeout=4,
+                timeout=4
             )
 
             await asyncio.wait_for(
                 ws.send_json({
                     "type": "frame",
                     "data": data,
-                    "monitor": selected_monitor,
+                    "monitor": monitor_index
                 }),
-                timeout=6,
+                timeout=6
             )
 
-            flow["sent"].append(loop.time())
+            flow["sent"].append(
+                loop.time()
+            )
+
             failing = False
 
         except asyncio.TimeoutError:
-            width, quality = 560, 42
+
+            width = 560
+            quality = 42
+
+        except asyncio.CancelledError:
+            raise
 
         except Exception as e:
+
             if not failing:
-                print("Screen capture error:", e, flush=True)
+                print(
+                    "[SCREEN] Capture error:",
+                    e,
+                    flush=True
+                )
 
             failing = True
+
             await asyncio.sleep(0.5)
 
         took = loop.time() - t0
         rtt = flow["rtt"]
 
         if took > 0.35 or rtt > 0.7:
-            width = max(520, width - 100)
-            quality = max(38, quality - 6)
 
-        elif took < 0.12 and rtt < 0.3 and width < 900:
-            width = min(900, width + 40)
-            quality = min(70, quality + 3)
+            width = max(
+                520,
+                width - 100
+            )
 
-        await asyncio.sleep(max(0.01, 1 / 20 - took))
+            quality = max(
+                38,
+                quality - 6
+            )
+
+        elif (
+            took < 0.12
+            and rtt < 0.3
+            and width < 900
+        ):
+
+            width = min(
+                900,
+                width + 40
+            )
+
+            quality = min(
+                70,
+                quality + 3
+            )
+
+        await asyncio.sleep(
+            max(0.01, 1 / 20 - took)
+        )
+
+
+# =========================================================
+# AUDIO STREAM
+# =========================================================
 
 async def audio_sender(ws):
-    speaker = None
+
     microphone = None
 
     while not ws.closed:
+
         if not audio_streaming["on"]:
             await asyncio.sleep(0.1)
             continue
 
         try:
+
             if microphone is None:
+
                 speaker = sc.default_speaker()
 
                 if speaker is None:
@@ -407,8 +657,10 @@ async def audio_sender(ws):
             if audio is None or len(audio) == 0:
                 continue
 
-            # تحويل الصوت إلى قناة واحدة
-            mono = np.asarray(audio, dtype=np.float32).mean(axis=1)
+            mono = np.asarray(
+                audio,
+                dtype=np.float32
+            ).mean(axis=1)
 
             pcm = np.clip(
                 mono * 32767,
@@ -418,7 +670,9 @@ async def audio_sender(ws):
 
             await ws.send_json({
                 "type": "audio_frame",
-                "data": base64.b64encode(pcm.tobytes()).decode("ascii"),
+                "data": base64.b64encode(
+                    pcm.tobytes()
+                ).decode("ascii"),
                 "rate": 16000,
                 "channels": 1
             })
@@ -427,32 +681,64 @@ async def audio_sender(ws):
             raise
 
         except Exception as e:
-            print("[AUDIO] Error:", e, flush=True)
+
+            print(
+                "[AUDIO] Error:",
+                e,
+                flush=True
+            )
+
             microphone = None
+
             await asyncio.sleep(1)
 
 
+# =========================================================
+# MACHINE ID
+# =========================================================
+
 def machine_id():
-    """هوية ثابتة لهذا الكمبيوتر."""
+
     try:
+
         import winreg
 
         with winreg.OpenKey(
             winreg.HKEY_LOCAL_MACHINE,
             r"SOFTWARE\Microsoft\Cryptography",
             0,
-            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+            winreg.KEY_READ | winreg.KEY_WOW64_64KEY
         ) as k:
-            return str(winreg.QueryValueEx(k, "MachineGuid")[0])
+
+            return str(
+                winreg.QueryValueEx(
+                    k,
+                    "MachineGuid"
+                )[0]
+            )
 
     except Exception:
-        import uuid
-        return "mac-" + str(uuid.getnode())
 
+        import uuid
+
+        return "mac-" + str(
+            uuid.getnode()
+        )
+
+
+# =========================================================
+# CONFIG
+# =========================================================
 
 def load_config():
+
     try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
+
+        with open(
+            CONFIG_PATH,
+            encoding="utf-8"
+        ) as f:
+
             return json.load(f)
 
     except Exception:
@@ -460,28 +746,56 @@ def load_config():
 
 
 def save_config(cfg):
+
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+
+        with open(
+            CONFIG_PATH,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
             json.dump(cfg, f)
 
     except Exception as e:
-        print("Could not save config:", e)
 
+        print(
+            "Could not save config:",
+            e
+        )
+
+
+# =========================================================
+# PAIRING
+# =========================================================
 
 def show_pair_code(code, ttl):
+
     pretty = f"{code[:4]} - {code[4:]}"
 
     print()
     print("=" * 50)
     print(f"   PAIRING CODE:   {pretty}")
     print("=" * 50)
-    print("   1) Open the website on your phone and log in")
-    print('   2) Tap "Link new computer" and type this code')
+
+    print(
+        "   1) Open the website on your phone and log in"
+    )
+
+    print(
+        '   2) Tap "Link new computer" and type this code'
+    )
+
     print(
         f"   (valid {ttl // 60} minutes - a new code appears automatically)"
     )
+
     print()
 
+
+# =========================================================
+# MAIN CONNECTION
+# =========================================================
 
 async def run(
     relay_addr: str,
@@ -489,10 +803,14 @@ async def run(
     agent_token: str,
     password: str = "",
 ):
-    """يرجع سببًا عند ضرورة إيقاف البرنامج."""
+
+    """الاتصال بالسيرفر وإدارة الترخيص والتحكم."""
+
     scheme = (
         "wss"
-        if relay_addr.startswith(("https://", "wss://"))
+        if relay_addr.startswith(
+            ("https://", "wss://")
+        )
         else "ws"
     )
 
@@ -516,12 +834,15 @@ async def run(
     print("=" * 50)
 
     def hello():
+
         if agent_token or password:
+
             return {
                 "type": "register_agent",
                 "username": username,
                 "hwid": hwid,
                 "name": name,
+
                 **(
                     {"agent_token": agent_token}
                     if agent_token
@@ -535,67 +856,179 @@ async def run(
             "name": name,
         }
 
-  while True:
-    sender_task = None
-    audio_task = None
-    refresh_task = None
-    wait = 5
+    while True:
+
+        sender_task = None
+        audio_task = None
+        refresh_task = None
+
+        wait = 5
+
         try:
+
             async with aiohttp.ClientSession() as session:
+
                 async with session.ws_connect(
                     url,
-                    heartbeat=20,
+                    heartbeat=20
                 ) as ws:
 
-                    await ws.send_json(hello())
+                    await ws.send_json(
+                        hello()
+                    )
 
                     async def refresh_code(ttl):
-                        await asyncio.sleep(max(30, ttl - 10))
+
+                        await asyncio.sleep(
+                            max(30, ttl - 10)
+                        )
+
                         await ws.send_json({
                             "type": "pair_request",
                             "hwid": hwid,
-                            "name": name,
+                            "name": name
                         })
 
-                   try:
-    async for raw in ws:
-        if raw.type != aiohttp.WSMsgType.TEXT:
-            continue
+                    try:
 
-        try:
-            msg = json.loads(raw.data)
-        except json.JSONDecodeError:
-            continue
+                        async for raw in ws:
 
-        if msg.get("type") == "audio_stream":
-            audio_streaming["on"] = bool(msg.get("on"))
-            print("[AUDIO] Streaming:", audio_streaming["on"], flush=True)
-            continue
+                            if raw.type != aiohttp.WSMsgType.TEXT:
+                                continue
 
-        t = msg.get("type")
+                            try:
 
-                            # ---------- Pairing code ----------
+                                msg = json.loads(
+                                    raw.data
+                                )
+
+                            except json.JSONDecodeError:
+                                continue
+
+                            t = msg.get("type")
+
+                            # ---------------------------------
+                            # AUDIO
+                            # ---------------------------------
+
+                            if t == "audio_stream":
+
+                                audio_streaming["on"] = bool(
+                                    msg.get("on")
+                                )
+
+                                print(
+                                    "[AUDIO] Streaming:",
+                                    audio_streaming["on"],
+                                    flush=True
+                                )
+
+                                continue
+
+                            # ---------------------------------
+                            # MONITOR SELECTION
+                            # ---------------------------------
+
+                            if t == "select_monitor":
+
+                                try:
+
+                                    monitors = get_monitors()
+
+                                    index = int(
+                                        msg.get("index", 0)
+                                    )
+
+                                    if monitors:
+
+                                        index = max(
+                                            0,
+                                            min(
+                                                index,
+                                                len(monitors) - 1
+                                            )
+                                        )
+
+                                        selected_monitor["index"] = index
+
+                                    else:
+                                        index = 0
+
+                                    flow["sent"].clear()
+
+                                    print(
+                                        f"[SCREEN] Selected monitor: {index + 1}",
+                                        flush=True
+                                    )
+
+                                    await ws.send_json({
+                                        "type": "monitor_selected",
+                                        "index": index
+                                    })
+
+                                except Exception as e:
+
+                                    print(
+                                        "[SCREEN] Selection error:",
+                                        e,
+                                        flush=True
+                                    )
+
+                                continue
+
+                            # ---------------------------------
+                            # GET MONITORS
+                            # ---------------------------------
+
+                            if t == "get_monitors":
+
+                                monitors = get_monitors()
+
+                                await ws.send_json({
+                                    "type": "monitors",
+                                    "monitors": [
+                                        {
+                                            "index": i,
+                                            "name": f"الشاشة {i + 1}",
+                                            "width": m["width"],
+                                            "height": m["height"]
+                                        }
+                                        for i, m in enumerate(monitors)
+                                    ]
+                                })
+
+                                continue
+
+                            # ---------------------------------
+                            # PAIRING CODE
+                            # ---------------------------------
+
                             if t == "pair_code":
+
                                 if msg.get("ok") is False:
+
                                     reason = msg.get(
                                         "reason",
-                                        "unknown",
+                                        "unknown"
                                     )
 
                                     print(
                                         "Pairing request failed:",
-                                        REASONS.get(reason, reason),
+                                        REASONS.get(reason, reason)
                                     )
 
                                     wait = 30
                                     break
 
-                                code = str(msg.get("code", ""))
+                                code = str(
+                                    msg.get("code", "")
+                                )
 
                                 if (
                                     len(code) != 8
                                     or not code.isdigit()
                                 ):
+
                                     print(
                                         "Invalid pairing code received."
                                     )
@@ -605,7 +1038,7 @@ async def run(
 
                                 show_pair_code(
                                     code,
-                                    int(msg.get("ttl", 600)),
+                                    int(msg.get("ttl", 600))
                                 )
 
                                 if refresh_task:
@@ -619,23 +1052,31 @@ async def run(
 
                                 continue
 
-                            # ---------- Pairing error ----------
+                            # ---------------------------------
+                            # PAIRING ERROR
+                            # ---------------------------------
+
                             if t == "pair_error":
+
                                 reason = msg.get(
                                     "reason",
-                                    "unknown",
+                                    "unknown"
                                 )
 
                                 print(
                                     "Pairing request failed:",
-                                    REASONS.get(reason, reason),
+                                    REASONS.get(reason, reason)
                                 )
 
                                 wait = 30
                                 break
 
-                            # ---------- Pairing completed ----------
+                            # ---------------------------------
+                            # PAIRING COMPLETED
+                            # ---------------------------------
+
                             if t == "pair_done":
+
                                 if refresh_task:
                                     refresh_task.cancel()
 
@@ -645,48 +1086,68 @@ async def run(
                                 save_config({
                                     "relay": relay_addr,
                                     "username": username,
-                                    "agent_token": agent_token,
+                                    "agent_token": agent_token
                                 })
 
                                 print(
                                     f"Linked to account '{username}' successfully."
                                 )
 
-                                await ws.send_json(hello())
+                                await ws.send_json(
+                                    hello()
+                                )
+
                                 continue
 
-                            # ---------- Agent registration ----------
+                            # ---------------------------------
+                            # AGENT REGISTRATION
+                            # ---------------------------------
+
                             if t == "registered_agent":
+
                                 if msg.get("ok"):
+
                                     if msg.get("agent_token"):
+
                                         agent_token = msg["agent_token"]
 
                                         save_config({
                                             "relay": relay_addr,
                                             "username": username,
-                                            "agent_token": agent_token,
+                                            "agent_token": agent_token
                                         })
 
                                     print(
                                         "Connected. Open the app on your phone and tap Connect."
                                     )
 
-                                   sender_task = asyncio.create_task(
-    frame_sender(ws)
-)
+                                    monitors = get_monitors()
 
-audio_task = asyncio.create_task(
-    audio_sender(ws)
-)
+                                    print(
+                                        f"[SCREEN] Detected {len(monitors)} monitor(s)",
+                                        flush=True
+                                    )
 
-print("[AUDIO] Sender started", flush=True)
+                                    sender_task = asyncio.create_task(
+                                        frame_sender(ws)
+                                    )
 
-continue
+                                    audio_task = asyncio.create_task(
+                                        audio_sender(ws)
+                                    )
+
+                                    print(
+                                        "[AUDIO] Sender started",
+                                        flush=True
+                                    )
+
+                                    continue
+
                                 reason = msg.get("reason")
 
                                 print(
                                     "Rejected:",
-                                    REASONS.get(reason, reason),
+                                    REASONS.get(reason, reason)
                                 )
 
                                 if reason in FATAL:
@@ -697,11 +1158,19 @@ continue
 
                                 break
 
+                            # ---------------------------------
+                            # WAIT UNTIL REGISTERED
+                            # ---------------------------------
+
                             if sender_task is None:
                                 continue
 
-                            # ---------- Controller status ----------
+                            # ---------------------------------
+                            # CONTROLLER STATUS
+                            # ---------------------------------
+
                             if t == "controller":
+
                                 print(
                                     "Phone connected - remote control is ACTIVE"
                                     if msg.get("connected")
@@ -709,33 +1178,71 @@ continue
                                 )
 
                             elif t == "license_ended":
+
                                 print(
                                     "Account ended or was changed by the seller."
                                 )
+
                                 return "ended"
 
                             else:
+
                                 try:
+
                                     handle_command(msg)
 
                                 except Exception as e:
-                                    print("Command error:", e)
 
-                   finally:
-    streaming["on"] = False
-    audio_streaming["on"] = False
+                                    print(
+                                        "Command error:",
+                                        e
+                                    )
 
-    if sender_task:
-        sender_task.cancel()
+                    finally:
 
-    if audio_task:
-        audio_task.cancel()
+                        streaming["on"] = False
+                        audio_streaming["on"] = False
 
-    if refresh_task:
-        refresh_task.cancel()
+                        tasks = [
+                            task
+                            for task in (
+                                sender_task,
+                                audio_task,
+                                refresh_task
+                            )
+                            if task is not None
+                        ]
 
+                        for task in tasks:
+                            task.cancel()
+
+                        if tasks:
+
+                            await asyncio.gather(
+                                *tasks,
+                                return_exceptions=True
+                            )
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception as e:
+
+            print(
+                "Connection lost, retrying in 5 seconds...",
+                e,
+                flush=True
+            )
+
+        await asyncio.sleep(wait)
+
+
+# =========================================================
+# MAIN
+# =========================================================
 
 def main():
+
     cfg = load_config()
 
     relay = (
@@ -744,25 +1251,46 @@ def main():
         or DEFAULT_RELAY
     ).strip()
 
-    username = cfg.get("username", "").strip().lower()
-    token = cfg.get("agent_token", "")
+    username = cfg.get(
+        "username",
+        ""
+    ).strip().lower()
+
+    token = cfg.get(
+        "agent_token",
+        ""
+    )
 
     try:
+
         if not relay:
-            relay = input("Server address: ").strip()
+            relay = input(
+                "Server address: "
+            ).strip()
 
         while True:
+
             if not token:
                 username = ""
 
             result = asyncio.run(
-                run(relay, username, token)
+                run(
+                    relay,
+                    username,
+                    token
+                )
             )
 
-            if result == "bad_credentials" and token:
+            if (
+                result == "bad_credentials"
+                and token
+            ):
+
                 token = ""
 
-                save_config({"relay": relay})
+                save_config({
+                    "relay": relay
+                })
 
                 print(
                     "This computer was unlinked. Pairing again..."
