@@ -1130,7 +1130,7 @@ async def forward(ws, msg):
         and msg.get("type") in ("frame", "audio_frame")
     ):
         await safe_send(r["control"], msg)
-        )
+        
 
 
 # ----------------------------------------------------------------
