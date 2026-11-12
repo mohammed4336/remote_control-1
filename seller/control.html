@@ -602,7 +602,7 @@ function backToLogin(info){
   resetScreenView();
 }
 
-let resuming = false, noResume = false, wakeLock = null;
+let resuming = false, noResume = false, autoLogin = false, wakeLock = null;
 async function keepAwake(on){
   try{
     if(on && 'wakeLock' in navigator && !wakeLock){
@@ -619,38 +619,56 @@ function leaveControl(){
   resetScreenView();
 }
 function tryResume(){
-  if(resuming || noResume || !lastCreds.password) return false;
+  if(resuming || noResume || !acc || !acc.token) return false;
+
   resuming = true;
+
   (async ()=>{
     for(let i = 1; i <= 25 && resuming; i++){
       try{
         await openWs(10000);
-        send({type:'login', ...lastCreds, token: acc ? acc.token : ''});
+        send({
+          type:'resume_login',
+          username:acc.username,
+          token:acc.token
+        });
         return;
-      }catch(e){ await new Promise(r=> setTimeout(r, Math.min(1000 * i, 4000))); }
+      }catch(e){
+        await new Promise(r=>setTimeout(r, Math.min(1000*i, 4000)));
+      }
     }
-    if(resuming){ resuming = false; backToLogin(); setErr('تعذر إعادة الاتصال، سجّل دخولك من جديد'); }
+
+    if(resuming){
+      resuming = false;
+      autoLogin = false;
+      backToLogin();
+      setErr('تعذر الاتصال بالسيرفر، حاول تسجيل الدخول');
+    }
   })();
+
   return true;
 }
-document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState !== 'visible') return;
-  const inControl = controlScreen.style.display === 'flex';
-  if(inControl){
-    keepAwake(true);
-    if(!ws || ws.readyState !== 1){ authed = false; showToast('إعادة الاتصال…'); tryResume(); }
-  }
 });
 
 function onClose(sock){
   if(sock !== ws) return;
-  if(resuming) return;
+  if(resuming || noResume) return;
+
   if(authed){
     authed = false;
-    if(!noResume && lastCreds.password){ showToast('انقطع الاتصال، جاري إعادة الاتصال…'); tryResume(); }
-    else { showToast('انقطع الاتصال'); backToLogin(); }
+
+    if(acc && acc.token){
+      showToast('انقطع الاتصال، جاري إعادة الاتصال…');
+      tryResume();
+    }else{
+      showToast('انقطع الاتصال');
+      backToLogin();
+    }
   }
-  else if(currentStep === 'stepPc'){ backToLogin(); setErr('انقطع الاتصال بالسيرفر'); }
+  else if(currentStep === 'stepPc'){
+    backToLogin();
+    setErr('انقطع الاتصال بالسيرفر');
+  }
 }
 
 function onMessage(ev){
@@ -683,15 +701,29 @@ function onMessage(ev){
     maskedLabel($('dOtpLabel'), 'رمز التحقق (أُرسل إلى ', msg.masked);
     showStep('stepNewDevice'); $('dOtp').focus();
 
-  }else if(t === 'login_ok'){
-    if(msg.token){ acc = {username: msg.username, token: msg.token}; saveAcc(acc); }
-    else if(!acc){ /* دخول بدون توكن محفوظ لا يصير: السيرفر يطلب رمز */ }
-    $('loginPass').value = ''; $('dOtp').value = ''; $('dSecret').value = '';
-    setInfo('');
-    noResume = false;
-    if(resuming){ send({type:'connect_pc'}); return; }
-    showStep('stepPc');
-    renderPc(msg.pc);
+ }else if(t === 'login_ok'){
+  if(msg.token){
+    acc = {username:msg.username, token:msg.token};
+    saveAcc(acc);
+  }
+
+  $('loginPass').value = '';
+  $('dOtp').value = '';
+  $('dSecret').value = '';
+
+  setInfo('');
+  noResume = false;
+
+  if(resuming && !autoLogin){
+    send({type:'connect_pc'});
+    return;
+  }
+
+  resuming = false;
+  autoLogin = false;
+
+  showStep('stepPc');
+  renderPc(msg.pc);
 
   }else if((t === 'signup_result' || t === 'login_result') && !ok){
     if(resuming){ leaveControl(); backToLogin(); }
@@ -858,8 +890,14 @@ $('connectPcBtn').addEventListener('click', ()=> go('connectPcBtn', {type:'conne
 $('refreshPcBtn').addEventListener('click', ()=>{ send({type:'pc_status'}); });
 $('logoutBtn').addEventListener('click', ()=>{ if(ws) try{ ws.close(); }catch(e){} backToLogin(); });
 
-if(acc) $('loginUser').value = acc.username;
-showStep('stepLogin');
+if(acc){
+  $('loginUser').value = acc.username;
+  showStep('stepLogin');
+  autoLogin = true;
+  tryResume();
+}else{
+  showStep('stepLogin');
+}
 
 function resetScreenView(){
   streaming = false;
