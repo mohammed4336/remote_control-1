@@ -1122,19 +1122,14 @@ async def forward(ws, msg):
         return
 
     if role == "control" and r.get("agent"):
-        await safe_send(
-            r["agent"],
-            msg
-        )
+        await safe_send(r["agent"], msg)
 
     elif (
         role == "agent"
         and r.get("control")
-        and msg.get("type") == "frame"
+        and msg.get("type") in ("frame", "audio_frame")
     ):
-        await safe_send(
-            r["control"],
-            msg
+        await safe_send(r["control"], msg)
         )
 
 
