@@ -199,7 +199,7 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
 /* الدوك السفلي */
 .dock{
   flex:0 0 auto;border-radius:20px;padding:10px 8px;
-  display:grid;grid-template-columns:repeat(7,1fr);gap:6px;
+  display:grid;grid-template-columns:repeat(8,1fr);gap:6px;
 }
 .dock-btn{
   display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -446,6 +446,10 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
     <button class="dock-btn" data-media="play_pause"><span class="ic">⏯️</span><span class="lb">تشغيل</span></button>
     <button class="dock-btn" data-media="mute"><span class="ic">🔇</span><span class="lb">كتم</span></button>
     <button class="dock-btn" data-action="power"><span class="ic">🔌</span><span class="lb">الطاقة</span></button>
+    <button class="dock-btn" id="audioToggleBtn">
+  <span class="ic">🎧</span>
+  <span class="lb" id="audioToggleLbl">تشغيل الصوت</span>
+</button>
   </div>
 </div>
 
@@ -759,6 +763,7 @@ function onMessage(ev){
 
   const t = msg.type;
   const ok = msg.ok!==false;
+  
 
   if(t==='otp_sent'){
     maskedLabel($('sOtpLabel'),'رمز التحقق (أُرسل إلى ',msg.masked);
@@ -908,6 +913,9 @@ function onMessage(ev){
     showToast('انتهى الحساب أو تم إيقافه');
     if(!authed) backToLogin('انتهى الحساب أو تم إيقافه');
 
+    }else if(t==='audio_frame'){
+  playAudioFrame(msg);
+    
   }else if(t==='frame'){
     const img = $('padScreenImg');
     img.onload = img.onerror = ()=>send({type:'frame_ack'});
@@ -1160,6 +1168,7 @@ if(acc){
 }
 
 function resetScreenView(){
+  stopAudio();
   streaming = false;
 
   const img = document.getElementById('padScreenImg');
