@@ -19,6 +19,8 @@ import platform
 import os
 import sys
 import subprocess
+import soundcard as sc
+import numpy as np
 from ctypes import wintypes
 
 import aiohttp
@@ -43,6 +45,7 @@ CONFIG_PATH = os.path.join(BASE_DIR, "agent_config.json")
 DEFAULT_RELAY = "https://remote-control-by-akira.onrender.com"
 
 streaming = {"on": False}
+audio_streaming = {"on": False}
 flow = {"sent": [], "rtt": 0.0}
 
 # ---------- Unicode keyboard input ----------
@@ -369,6 +372,64 @@ async def frame_sender(ws):
 
         await asyncio.sleep(max(0.01, 1 / 20 - took))
 
+async def audio_sender(ws):
+    speaker = None
+    microphone = None
+
+    while not ws.closed:
+        if not audio_streaming["on"]:
+            await asyncio.sleep(0.1)
+            continue
+
+        try:
+            if microphone is None:
+                speaker = sc.default_speaker()
+
+                if speaker is None:
+                    await asyncio.sleep(1)
+                    continue
+
+                microphone = sc.get_microphone(
+                    id=str(speaker.name),
+                    include_loopback=True
+                )
+
+            audio = await asyncio.to_thread(
+                microphone.record,
+                samplerate=16000,
+                numframes=640
+            )
+
+            if not audio_streaming["on"]:
+                continue
+
+            if audio is None or len(audio) == 0:
+                continue
+
+            # تحويل الصوت إلى قناة واحدة
+            mono = np.asarray(audio, dtype=np.float32).mean(axis=1)
+
+            pcm = np.clip(
+                mono * 32767,
+                -32768,
+                32767
+            ).astype("<i2")
+
+            await ws.send_json({
+                "type": "audio_frame",
+                "data": base64.b64encode(pcm.tobytes()).decode("ascii"),
+                "rate": 16000,
+                "channels": 1
+            })
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception as e:
+            print("[AUDIO] Error:", e, flush=True)
+            microphone = None
+            await asyncio.sleep(1)
+
 
 def machine_id():
     """هوية ثابتة لهذا الكمبيوتر."""
@@ -502,6 +563,9 @@ async def run(
 
                             try:
                                 msg = json.loads(raw.data)
+                                if msg.get("type") == "audio_stream":
+                                 audio_streaming["on"] = bool(msg.get("on"))
+                                  continue
 
                             except json.JSONDecodeError:
                                 continue
