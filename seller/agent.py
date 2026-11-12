@@ -534,11 +534,11 @@ async def run(
             "name": name,
         }
 
-    while True:
-        sender_task = None
-        refresh_task = None
-        wait = 5
-
+  while True:
+    sender_task = None
+    audio_task = None
+    refresh_task = None
+    wait = 5
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.ws_connect(
@@ -670,12 +670,17 @@ async def run(
                                         "Connected. Open the app on your phone and tap Connect."
                                     )
 
-                                    sender_task = asyncio.create_task(
-                                        frame_sender(ws)
-                                    )
+                                   sender_task = asyncio.create_task(
+    frame_sender(ws)
+)
 
-                                    continue
+audio_task = asyncio.create_task(
+    audio_sender(ws)
+)
 
+print("[AUDIO] Sender started", flush=True)
+
+continue
                                 reason = msg.get("reason")
 
                                 print(
@@ -715,22 +720,18 @@ async def run(
                                 except Exception as e:
                                     print("Command error:", e)
 
-                    finally:
-                        streaming["on"] = False
+                   finally:
+    streaming["on"] = False
+    audio_streaming["on"] = False
 
-                        if sender_task:
-                            sender_task.cancel()
+    if sender_task:
+        sender_task.cancel()
 
-                        if refresh_task:
-                            refresh_task.cancel()
+    if audio_task:
+        audio_task.cancel()
 
-        except Exception as e:
-            print(
-                "Connection lost, retrying in 5 seconds...",
-                e,
-            )
-
-        await asyncio.sleep(wait)
+    if refresh_task:
+        refresh_task.cancel()
 
 
 def main():
