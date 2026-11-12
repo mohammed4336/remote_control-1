@@ -1382,6 +1382,131 @@ document.querySelectorAll('.hold-btn').forEach(btn=>{
 
   btn.addEventListener('contextmenu',e=>e.preventDefault());
 });
+  /* استقبال صوت الكمبيوتر مباشرة */
+let audioEnabled = false;
+let audioContext = null;
+let nextAudioTime = 0;
+let audioSources = new Set();
+
+async function startAudio(){
+  try{
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+
+    if(!AudioCtx){
+      showToast('متصفحك لا يدعم تشغيل الصوت');
+      return;
+    }
+
+    if(!audioContext){
+      audioContext = new AudioCtx();
+    }
+
+    await audioContext.resume();
+
+    audioEnabled = true;
+    nextAudioTime = audioContext.currentTime + 0.08;
+
+    send({type:'audio_stream',on:true});
+
+    $('audioToggleLbl').textContent = 'إيقاف الصوت';
+    $('audioToggleBtn').querySelector('.ic').textContent = '🔊';
+
+    showToast('تم تشغيل الصوت المباشر');
+  }catch(e){
+    showToast('تعذر تشغيل الصوت');
+  }
+}
+
+function stopAudio(){
+  audioEnabled = false;
+
+  send({type:'audio_stream',on:false});
+
+  for(const source of audioSources){
+    try{source.stop();}catch(e){}
+  }
+
+  audioSources.clear();
+  nextAudioTime = 0;
+
+  if(audioContext){
+    try{audioContext.suspend();}catch(e){}
+  }
+
+  const btn = $('audioToggleBtn');
+
+  if(btn){
+    $('audioToggleLbl').textContent = 'تشغيل الصوت';
+    btn.querySelector('.ic').textContent = '🎧';
+  }
+}
+
+function playAudioFrame(msg){
+  if(!audioEnabled || !audioContext || audioContext.state !== 'running'){
+    return;
+  }
+
+  try{
+    const binary = atob(msg.data);
+    const samples = new Int16Array(binary.length / 2);
+
+    for(let i=0;i<samples.length;i++){
+      const lo = binary.charCodeAt(i*2);
+      const hi = binary.charCodeAt(i*2+1);
+      let value = (hi << 8) | lo;
+
+      if(value >= 32768) value -= 65536;
+
+      samples[i] = value;
+    }
+
+    if(!samples.length) return;
+
+    const rate = msg.rate || 16000;
+    const buffer = audioContext.createBuffer(1,samples.length,rate);
+    const channel = buffer.getChannelData(0);
+
+    for(let i=0;i<samples.length;i++){
+      channel[i] = samples[i] / 32768;
+    }
+
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioContext.destination);
+
+    const now = audioContext.currentTime;
+
+    if(nextAudioTime < now){
+      nextAudioTime = now + 0.06;
+    }
+
+    // منع تراكم التأخير إذا وصل الصوت متأخراً
+    if(nextAudioTime - now > 0.5){
+      nextAudioTime = now + 0.06;
+    }
+
+    source.start(nextAudioTime);
+    nextAudioTime += buffer.duration;
+
+    audioSources.add(source);
+    source.onended = ()=>{
+      audioSources.delete(source);
+      try{source.disconnect();}catch(e){}
+    };
+
+  }catch(e){
+    console.warn('Audio frame error:',e);
+  }
+}
+
+$('audioToggleBtn').addEventListener('click',async()=>{
+  if(audioEnabled){
+    stopAudio();
+    showToast('تم إيقاف الصوت');
+  }else{
+    await startAudio();
+  }
+});
 </script>
 </body>
 </html>
