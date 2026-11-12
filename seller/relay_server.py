@@ -591,11 +591,12 @@ async def on_pair_request(ws, ip, msg):
         flush=True
     )
 
-    await safe_send(ws, {
-        "type": "pair_code",
-        "code": code,
-        "ttl": PAIR_TTL
-    })
+await safe_send(ws, {
+    "type": "pair_code",
+    "ok": True,
+    "code": code,
+    "ttl": PAIR_TTL
+})
 
 
 async def on_pair_confirm(ws, ip, msg):
