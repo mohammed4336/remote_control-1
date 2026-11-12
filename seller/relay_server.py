@@ -3,9 +3,10 @@
 """
 السيرفر الوسيط + نظام التراخيص — يشتغل على سيرفرك أنت (مو عند المشتري).
 
-- المشتري يفعّل من جواله: كود الترخيص -> رمز تحقق على جواله/إيميله المسجّل -> يختار PIN.
-- الـ agent على كمبيوتره يرتبط بالترخيص أول مرة (بصمة الجهاز) وما يشتغل على جهاز ثاني.
-- الجوال مربوط بتوكن سري محفوظ عنده + PIN، وجوال واحد فقط في نفس الوقت.
+- المشتري يفعّل من جواله: كود الترخيص -> رمز تحقق -> PIN.
+- الـ Agent يرتبط بالترخيص وبصمة الجهاز.
+- الجوال يستخدم توكن سري محفوظ لتسجيل الدخول تلقائياً.
+- جوال واحد فقط في نفس الوقت.
 
 التشغيل: python relay_server.py
 """
@@ -27,8 +28,10 @@ from aiohttp import web, WSMsgType
 import licensedb as ldb
 import otp as otpmod
 
+
 PORT = int(os.environ.get("PORT", "8080"))
 ENFORCE_INTERVAL = float(os.environ.get("ENFORCE_INTERVAL", "30"))
+
 BASE_DIR = (
     os.path.dirname(sys.executable)
     if getattr(sys, "frozen", False)
@@ -39,20 +42,24 @@ OTP_TTL = 600
 OTP_MAX_ATTEMPTS = 5
 OTP_COOLDOWN = 60
 OTP_MAX_PER_HOUR = 5
+
 AUTH_FAIL_LIMIT = 5
 AUTH_LOCK_SECONDS = 900
 
 rooms = {}
 ws_info = {}
 otp_state = {}
-# أكواد ربط الكمبيوتر المؤقتة
+
 pending_pairs = {}
-PAIR_TTL = 600  # صلاحية الكود 10 دقائق
+PAIR_TTL = 600
+
 buckets = defaultdict(list)
 auth_fails = defaultdict(list)
 
 
-# ---------------------------------------------------------------- أدوات مساعدة
+# ----------------------------------------------------------------
+# أدوات مساعدة
+# ----------------------------------------------------------------
 
 def _h(text):
     return hashlib.sha256(text.encode()).hexdigest()
@@ -74,13 +81,18 @@ TRUST_PROXY = os.environ.get("TRUST_PROXY", "").strip().lower()
 
 def client_ip(request):
     if request.remote in ("127.0.0.1", "::1"):
-        fwd = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", "")
+        fwd = (
+            request.headers.get("CF-Connecting-IP")
+            or request.headers.get("X-Forwarded-For", "")
+        )
         if fwd:
             return fwd.split(",")[0].strip()
+
     elif TRUST_PROXY == "cf":
         v = request.headers.get("CF-Connecting-IP", "").strip()
         if v:
             return v
+
     elif TRUST_PROXY == "xff":
         parts = [
             x.strip()
@@ -89,6 +101,7 @@ def client_ip(request):
         ]
         if parts:
             return parts[-1]
+
     return request.remote or "unknown"
 
 
@@ -115,9 +128,14 @@ async def safe_close(ws):
         pass
 
 
-# ---------------------------------------------------------------- تفعيل الجوال
+# ----------------------------------------------------------------
+# تفعيل الجوال
+# ----------------------------------------------------------------
 
-SIGNUP_MODE = os.environ.get("SIGNUP_MODE", "approval").strip().lower()
+SIGNUP_MODE = os.environ.get(
+    "SIGNUP_MODE", "approval"
+).strip().lower()
+
 signups = {}
 setups = {}
 
@@ -127,12 +145,19 @@ def reply(ws, type_, **kw):
 
 
 def fail(ws, type_, reason, **kw):
-    return safe_send(ws, {"type": type_, "ok": False, "reason": reason, **kw})
+    return safe_send(
+        ws,
+        {"type": type_, "ok": False, "reason": reason, **kw}
+    )
 
 
 async def issue_otp(st, channel, contact, code_for_limits=None):
     t = time.time()
-    st["sent"] = [x for x in st["sent"] if t - x < 3600]
+
+    st["sent"] = [
+        x for x in st["sent"]
+        if t - x < 3600
+    ]
 
     if st["sent"] and t - st["sent"][-1] < OTP_COOLDOWN:
         wait = int(OTP_COOLDOWN - (t - st["sent"][-1])) + 1
@@ -169,17 +194,21 @@ def check_otp(st, key, otp):
     return None
 
 
-# ---------------------------------------------------------------- التسجيل
+# ----------------------------------------------------------------
+# التسجيل
+# ----------------------------------------------------------------
 
 async def on_signup_start(ws, ip, msg):
     if over("fail", ip, 15, 600) or over("signup", ip, 10, 3600):
         return await fail(ws, "signup_result", "rate_limited")
 
     parsed = ldb.parse_contact(msg.get("contact"))
+
     if not parsed:
         return await fail(ws, "signup_result", "bad_contact")
 
     secret = str(msg.get("secret", "")).strip()
+
     if not re.fullmatch(r"\d{6}", secret):
         return await fail(ws, "signup_result", "bad_secret_format")
 
@@ -193,13 +222,20 @@ async def on_signup_start(ws, ip, msg):
 
     st = signups.setdefault(
         contact,
-        {"sent": [], "hash": None, "exp": 0, "attempts": 0}
+        {
+            "sent": [],
+            "hash": None,
+            "exp": 0,
+            "attempts": 0
+        }
     )
 
     otp, why, wait = await issue_otp(st, channel, contact)
 
     if why:
-        return await fail(ws, "signup_result", why, wait=wait)
+        return await fail(
+            ws, "signup_result", why, wait=wait
+        )
 
     st.update(
         hash=_h(contact + otp),
@@ -234,6 +270,7 @@ async def on_signup_verify(ws, ip, msg):
     if why:
         if why == "wrong_otp":
             record("fail", ip)
+
         return await fail(ws, "signup_result", why)
 
     existing = ldb.get_by_contact(contact)
@@ -244,7 +281,11 @@ async def on_signup_verify(ws, ip, msg):
     code = (
         existing["code"]
         if existing
-        else ldb.create_license(channel, contact, "self-signup")
+        else ldb.create_license(
+            channel,
+            contact,
+            "self-signup"
+        )
     )
 
     ldb.set_status(
@@ -262,7 +303,11 @@ async def on_signup_verify(ws, ip, msg):
 
     st["hash"] = None
 
-    await reply(ws, "signup_verified", setup_token=token)
+    await reply(
+        ws,
+        "signup_verified",
+        setup_token=token
+    )
 
 
 async def on_set_credentials(ws, ip, msg):
@@ -281,7 +326,11 @@ async def on_set_credentials(ws, ip, msg):
     if not 8 <= len(password) <= 72:
         return await fail(ws, "signup_result", "bad_password")
 
-    res = ldb.set_credentials(s["code"], username, password)
+    res = ldb.set_credentials(
+        s["code"],
+        username,
+        password
+    )
 
     if res != "ok":
         reason = "username_taken" if res == "taken" else "exists"
@@ -289,7 +338,11 @@ async def on_set_credentials(ws, ip, msg):
 
     token = secrets.token_urlsafe(32)
 
-    ldb.bind_phone(s["code"], token, s["secret"])
+    ldb.bind_phone(
+        s["code"],
+        token,
+        s["secret"]
+    )
 
     setups.pop(setup_token, None)
 
@@ -305,11 +358,18 @@ async def on_set_credentials(ws, ip, msg):
     )
 
 
-# ---------------------------------------------------------------- دخول الجوال
+# ----------------------------------------------------------------
+# دخول الجوال والجلسات
+# ----------------------------------------------------------------
 
 def session_of(ws, role=None):
     info = ws_info.get(ws)
-    return info if info and (role is None or info[1] == role) else None
+
+    return (
+        info
+        if info and (role is None or info[1] == role)
+        else None
+    )
 
 
 async def start_session(ws, row, new_token=None):
@@ -317,7 +377,11 @@ async def start_session(ws, row, new_token=None):
 
     r = rooms.setdefault(
         code,
-        {"agent": None, "control": None, "pending": None}
+        {
+            "agent": None,
+            "control": None,
+            "pending": None
+        }
     )
 
     old = r.get("pending")
@@ -385,7 +449,12 @@ async def on_login(ws, ip, msg):
 
     st = otp_state.setdefault(
         code,
-        {"sent": [], "hash": None, "exp": 0, "attempts": 0}
+        {
+            "sent": [],
+            "hash": None,
+            "exp": 0,
+            "attempts": 0
+        }
     )
 
     otp, why, wait = await issue_otp(
@@ -395,7 +464,9 @@ async def on_login(ws, ip, msg):
     )
 
     if why:
-        return await fail(ws, "login_result", why, wait=wait)
+        return await fail(
+            ws, "login_result", why, wait=wait
+        )
 
     st.update(
         hash=_h(code + otp),
@@ -406,13 +477,92 @@ async def on_login(ws, ip, msg):
     await reply(
         ws,
         "need_otp",
-        masked=ldb.mask_contact(row["channel"], row["contact"])
+        masked=ldb.mask_contact(
+            row["channel"],
+            row["contact"]
+        )
     )
+
+
+# ----------------------------------------------------------------
+# تسجيل الدخول التلقائي بالتوكن
+# ----------------------------------------------------------------
+
+async def on_resume_login(ws, ip, msg):
+    """
+    استعادة جلسة الجوال باستخدام التوكن المحفوظ فقط.
+    لا يطلب كلمة المرور أو OTP عند كل زيارة.
+    """
+
+    if over("fail", ip, 15, 600):
+        return await fail(
+            ws,
+            "login_result",
+            "rate_limited"
+        )
+
+    username = (
+        ldb.normalize_username(msg.get("username")) or ""
+    )
+
+    token = str(msg.get("token", "")).strip()
+
+    if not username or not token:
+        return await fail(
+            ws,
+            "login_result",
+            "bad_credentials"
+        )
+
+    row = ldb.get_by_username(username)
+
+    if not row:
+        record("fail", ip)
+        return await fail(
+            ws,
+            "login_result",
+            "bad_credentials"
+        )
+
+    code = row["code"]
+
+    if locked(code):
+        return await fail(
+            ws,
+            "login_result",
+            "locked"
+        )
+
+    ok, reason = ldb.usable(row)
+
+    if not ok:
+        return await fail(
+            ws,
+            "login_result",
+            reason
+        )
+
+    if not ldb.check_token(row, token):
+        record("fail", ip)
+        auth_fails[code].append(time.time())
+
+        return await fail(
+            ws,
+            "login_result",
+            "session_expired"
+        )
+
+    # التوكن صحيح والترخيص صالح: استعادة الجلسة
+    await start_session(ws, row)
 
 
 async def on_login_verify(ws, ip, msg):
     if over("fail", ip, 15, 600):
-        return await fail(ws, "login_result", "rate_limited")
+        return await fail(
+            ws,
+            "login_result",
+            "rate_limited"
+        )
 
     row = ldb.get_by_username(
         ldb.normalize_username(msg.get("username")) or ""
@@ -421,7 +571,11 @@ async def on_login_verify(ws, ip, msg):
     code = row and row["code"]
 
     if code and locked(code):
-        return await fail(ws, "login_result", "locked")
+        return await fail(
+            ws,
+            "login_result",
+            "locked"
+        )
 
     secret = str(msg.get("secret", "")).strip()
 
@@ -431,12 +585,20 @@ async def on_login_verify(ws, ip, msg):
         if code:
             auth_fails[code].append(time.time())
 
-        return await fail(ws, "login_result", "bad_credentials")
+        return await fail(
+            ws,
+            "login_result",
+            "bad_credentials"
+        )
 
     ok, reason = ldb.usable(row)
 
     if not ok:
-        return await fail(ws, "login_result", reason)
+        return await fail(
+            ws,
+            "login_result",
+            reason
+        )
 
     why = check_otp(
         otp_state.get(code),
@@ -447,19 +609,37 @@ async def on_login_verify(ws, ip, msg):
     if why:
         if why == "wrong_otp":
             record("fail", ip)
-        return await fail(ws, "login_result", why)
+
+        return await fail(
+            ws,
+            "login_result",
+            why
+        )
 
     if not ldb.check_pin(row, secret):
         record("fail", ip)
         auth_fails[code].append(time.time())
-        return await fail(ws, "login_result", "bad_secret")
+
+        return await fail(
+            ws,
+            "login_result",
+            "bad_secret"
+        )
 
     token = secrets.token_urlsafe(32)
 
-    res = ldb.bind_phone(code, token, secret)
+    res = ldb.bind_phone(
+        code,
+        token,
+        secret
+    )
 
     if res != "ok":
-        return await fail(ws, "login_result", res)
+        return await fail(
+            ws,
+            "login_result",
+            res
+        )
 
     otp_state[code]["hash"] = None
 
@@ -470,31 +650,53 @@ async def on_login_verify(ws, ip, msg):
     )
 
 
+# ----------------------------------------------------------------
+# الاتصال بالكمبيوتر
+# ----------------------------------------------------------------
+
 async def on_connect_pc(ws, ip, msg):
     info = session_of(ws, "authed")
 
     if not info:
-        return await fail(ws, "auth_result", "bad_credentials")
+        return await fail(
+            ws,
+            "auth_result",
+            "bad_credentials"
+        )
 
     code = info[0]
     r = rooms.get(code)
 
     if not r or not r.get("agent"):
-        return await fail(ws, "auth_result", "agent_offline")
+        return await fail(
+            ws,
+            "auth_result",
+            "agent_offline"
+        )
 
     r["pending"] = None
 
-    await kick_control(code, except_ws=ws)
+    await kick_control(
+        code,
+        except_ws=ws
+    )
 
     r["control"] = ws
     ws_info[ws] = (code, "control")
 
     await safe_send(
         r["agent"],
-        {"type": "controller", "connected": True}
+        {
+            "type": "controller",
+            "connected": True
+        }
     )
 
-    await reply(ws, "auth_result", ok=True)
+    await reply(
+        ws,
+        "auth_result",
+        ok=True
+    )
 
 
 async def on_pc_status(ws, ip, msg):
@@ -518,10 +720,18 @@ async def kick_control(code, except_ws=None):
 
     if old and old is not except_ws:
         r["control"] = None
-        await safe_send(old, {"type": "kicked"})
+
+        await safe_send(
+            old,
+            {"type": "kicked"}
+        )
+
         await safe_close(old)
 
-# ---------------------------------------------------------------- ربط الكمبيوتر بالجوال
+
+# ----------------------------------------------------------------
+# ربط الكمبيوتر بالجوال
+# ----------------------------------------------------------------
 
 def clean_pair_codes():
     now = time.time()
@@ -532,37 +742,43 @@ def clean_pair_codes():
 
 
 async def on_pair_request(ws, ip, msg):
-    # لا تسمح بإعادة طلب كود من Agent مسجل بالفعل
     if ws_info.get(ws):
-        return await safe_send(ws, {
-            "type": "pair_error",
-            "reason": "already_registered"
-        })
+        return await safe_send(
+            ws,
+            {
+                "type": "pair_error",
+                "reason": "already_registered"
+            }
+        )
 
     if over("pair_request", ip, 10, 600):
-        return await safe_send(ws, {
-            "type": "pair_error",
-            "reason": "rate_limited"
-        })
+        return await safe_send(
+            ws,
+            {
+                "type": "pair_error",
+                "reason": "rate_limited"
+            }
+        )
 
     hwid = str(msg.get("hwid", "")).strip()[:200]
     name = str(msg.get("name", "Computer")).strip()[:60]
 
     if not hwid:
-        return await safe_send(ws, {
-            "type": "pair_error",
-            "reason": "bad_device"
-        })
+        return await safe_send(
+            ws,
+            {
+                "type": "pair_error",
+                "reason": "bad_device"
+            }
+        )
 
     record("pair_request", ip)
     clean_pair_codes()
 
-    # حذف أي كود سابق لهذا الاتصال
     for old_code, data in list(pending_pairs.items()):
         if data["ws"] is ws:
             pending_pairs.pop(old_code, None)
 
-    # إنشاء كود عشوائي من 8 أرقام
     code = None
 
     for _ in range(20):
@@ -573,10 +789,13 @@ async def on_pair_request(ws, ip, msg):
             break
 
     if not code:
-        return await safe_send(ws, {
-            "type": "pair_error",
-            "reason": "server_busy"
-        })
+        return await safe_send(
+            ws,
+            {
+                "type": "pair_error",
+                "reason": "server_busy"
+            }
+        )
 
     pending_pairs[code] = {
         "ws": ws,
@@ -591,12 +810,16 @@ async def on_pair_request(ws, ip, msg):
         flush=True
     )
 
-await safe_send(ws, {
-    "type": "pair_code",
-    "ok": True,
-    "code": code,
-    "ttl": PAIR_TTL
-})
+    # مهم: يجب أن يكون إرسال الكود داخل الدالة
+    await safe_send(
+        ws,
+        {
+            "type": "pair_code",
+            "ok": True,
+            "code": code,
+            "ttl": PAIR_TTL
+        }
+    )
 
 
 async def on_pair_confirm(ws, ip, msg):
@@ -604,58 +827,76 @@ async def on_pair_confirm(ws, ip, msg):
 
     if not info:
         return await fail(
-            ws, "pair_result", "bad_credentials"
+            ws,
+            "pair_result",
+            "bad_credentials"
         )
 
     code = info[0]
-
-    # الترخيص مأخوذ من جلسة الجوال، وليس من طلب المستخدم
     row = ldb.get_license(code)
 
     if not row:
         return await fail(
-            ws, "pair_result", "license_not_found"
+            ws,
+            "pair_result",
+            "license_not_found"
         )
 
     ok, reason = ldb.usable(row)
 
     if not ok:
         return await fail(
-            ws, "pair_result", reason
+            ws,
+            "pair_result",
+            reason
         )
 
     if not row.get("phone_token_hash"):
         return await fail(
-            ws, "pair_result", "phone_not_bound"
+            ws,
+            "pair_result",
+            "phone_not_bound"
         )
 
     pair_code = re.sub(
-        r"\D", "", str(msg.get("code", ""))
+        r"\D",
+        "",
+        str(msg.get("code", ""))
     )
 
     if not re.fullmatch(r"\d{8}", pair_code):
         return await fail(
-            ws, "pair_result", "bad_pair_code"
+            ws,
+            "pair_result",
+            "bad_pair_code"
         )
 
     clean_pair_codes()
 
-    pairing = pending_pairs.pop(pair_code, None)
+    pairing = pending_pairs.pop(
+        pair_code,
+        None
+    )
 
     if not pairing:
         return await fail(
-            ws, "pair_result", "bad_pair_code"
+            ws,
+            "pair_result",
+            "bad_pair_code"
         )
 
     agent_ws = pairing["ws"]
 
     if agent_ws.closed:
         return await fail(
-            ws, "pair_result", "agent_offline"
+            ws,
+            "pair_result",
+            "agent_offline"
         )
 
-    # ربط بصمة الجهاز بالترخيص
-    machine_hash = _h("hw:" + pairing["hwid"])
+    machine_hash = _h(
+        "hw:" + pairing["hwid"]
+    )
 
     bound, why = ldb.bind_agent(
         code,
@@ -664,13 +905,17 @@ async def on_pair_confirm(ws, ip, msg):
 
     if not bound:
         return await fail(
-            ws, "pair_result", why or "device_mismatch"
+            ws,
+            "pair_result",
+            why or "device_mismatch"
         )
 
-    # إنشاء توكن خاص بالكمبيوتر
     agent_token = secrets.token_urlsafe(32)
 
-    ldb.set_agent_token(code, agent_token)
+    ldb.set_agent_token(
+        code,
+        agent_token
+    )
 
     ldb.set_agent_info(
         code,
@@ -678,12 +923,14 @@ async def on_pair_confirm(ws, ip, msg):
         pairing["name"]
     )
 
-    # إرسال بيانات الربط إلى Agent
-    await safe_send(agent_ws, {
-        "type": "pair_done",
-        "username": row["username"],
-        "agent_token": agent_token
-    })
+    await safe_send(
+        agent_ws,
+        {
+            "type": "pair_done",
+            "username": row["username"],
+            "agent_token": agent_token
+        }
+    )
 
     print(
         f"[PAIR] Successfully paired: {row['username']} / {pairing['name']}",
@@ -698,7 +945,9 @@ async def on_pair_confirm(ws, ip, msg):
     )
 
 
-# ---------------------------------------------------------------- تسجيل الـ agent
+# ----------------------------------------------------------------
+# تسجيل الـ Agent
+# ----------------------------------------------------------------
 
 async def on_register_agent(ws, ip, msg):
     hwid = str(msg.get("hwid", ""))[:200]
@@ -707,7 +956,11 @@ async def on_register_agent(ws, ip, msg):
     def deny(reason):
         return safe_send(
             ws,
-            {"type": "registered_agent", "ok": False, "reason": reason}
+            {
+                "type": "registered_agent",
+                "ok": False,
+                "reason": reason
+            }
         )
 
     if over("fail", ip, 15, 600):
@@ -733,10 +986,14 @@ async def on_register_agent(ws, ip, msg):
 
     if not (
         by_token
-        or ldb.check_password(row, msg.get("password", ""))
+        or ldb.check_password(
+            row,
+            msg.get("password", "")
+        )
     ):
         record("fail", ip)
         auth_fails[code].append(time.time())
+
         return await deny("bad_credentials")
 
     ok, reason = ldb.usable(row)
@@ -744,13 +1001,20 @@ async def on_register_agent(ws, ip, msg):
     if not ok:
         return await deny(reason)
 
-    bound, why = ldb.bind_agent(code, _h("hw:" + hwid))
+    bound, why = ldb.bind_agent(
+        code,
+        _h("hw:" + hwid)
+    )
 
     if not bound:
         record("fail", ip)
         return await deny(why)
 
-    ldb.set_agent_info(code, ip, name)
+    ldb.set_agent_info(
+        code,
+        ip,
+        name
+    )
 
     new_token = None
 
@@ -760,7 +1024,11 @@ async def on_register_agent(ws, ip, msg):
 
     r = rooms.setdefault(
         code,
-        {"agent": None, "control": None, "pending": None}
+        {
+            "agent": None,
+            "control": None,
+            "pending": None
+        }
     )
 
     old = r.get("agent")
@@ -780,16 +1048,21 @@ async def on_register_agent(ws, ip, msg):
         }
     )
 
-    for w in (r.get("control"), r.get("pending")):
+    for w in (
+        r.get("control"),
+        r.get("pending")
+    ):
         if w:
             await safe_send(
                 w,
-                {"type": "agent_online", "name": name}
+                {
+                    "type": "agent_online",
+                    "name": name
+                }
             )
 
 
 async def cleanup(ws):
-    # حذف أي أكواد ربط مرتبطة بهذا الكمبيوتر
     for code, data in list(pending_pairs.items()):
         if data["ws"] is ws:
             pending_pairs.pop(code, None)
@@ -798,6 +1071,42 @@ async def cleanup(ws):
 
     if not info:
         return
+
+    code, role = info
+    r = rooms.get(code)
+
+    if not r:
+        return
+
+    if role == "agent" and r.get("agent") is ws:
+        r["agent"] = None
+
+        control = r.get("control")
+        pending = r.get("pending")
+
+        for w in (control, pending):
+            if w:
+                await safe_send(
+                    w,
+                    {
+                        "type": "agent_offline"
+                    }
+                )
+
+    elif role == "control" and r.get("control") is ws:
+        r["control"] = None
+
+        if r.get("agent"):
+            await safe_send(
+                r["agent"],
+                {
+                    "type": "controller",
+                    "connected": False
+                }
+            )
+
+    elif role == "authed" and r.get("pending") is ws:
+        r["pending"] = None
 
 
 async def forward(ws, msg):
@@ -813,22 +1122,41 @@ async def forward(ws, msg):
         return
 
     if role == "control" and r.get("agent"):
-        await safe_send(r["agent"], msg)
+        await safe_send(
+            r["agent"],
+            msg
+        )
 
-    elif role == "agent" and r.get("control") and msg.get("type") == "frame":
-        await safe_send(r["control"], msg)
+    elif (
+        role == "agent"
+        and r.get("control")
+        and msg.get("type") == "frame"
+    ):
+        await safe_send(
+            r["control"],
+            msg
+        )
 
+
+# ----------------------------------------------------------------
+# معالجات WebSocket
+# ----------------------------------------------------------------
 
 HANDLERS = {
     "pair_request": on_pair_request,
     "pair_confirm": on_pair_confirm,
+
     "signup_start": on_signup_start,
     "signup_verify": on_signup_verify,
     "set_credentials": on_set_credentials,
+
     "login": on_login,
+    "resume_login": on_resume_login,
     "login_verify": on_login_verify,
+
     "connect_pc": on_connect_pc,
     "pc_status": on_pc_status,
+
     "register_agent": on_register_agent,
 }
 
@@ -855,7 +1183,9 @@ async def ws_handler(request):
             if not isinstance(msg, dict):
                 continue
 
-            handler = HANDLERS.get(msg.get("type"))
+            handler = HANDLERS.get(
+                msg.get("type")
+            )
 
             if handler:
                 await handler(ws, ip, msg)
@@ -868,7 +1198,9 @@ async def ws_handler(request):
     return ws
 
 
-# ---------------------------------------------------------------- فرض الترخيص
+# ----------------------------------------------------------------
+# فرض الترخيص
+# ----------------------------------------------------------------
 
 async def enforcer():
     while True:
@@ -896,7 +1228,10 @@ async def enforcer():
             ]
 
             for w in targets:
-                await safe_send(w, {"type": "license_ended"})
+                await safe_send(
+                    w,
+                    {"type": "license_ended"}
+                )
 
             for w in targets:
                 await safe_close(w)
@@ -915,9 +1250,13 @@ async def background(app):
         pass
 
 
-# ---------------------------------------------------------------- الملفات الثابتة
+# ----------------------------------------------------------------
+# الملفات الثابتة
+# ----------------------------------------------------------------
 
-NO_CACHE = {"Cache-Control": "no-cache"}
+NO_CACHE = {
+    "Cache-Control": "no-cache"
+}
 
 
 async def index(request):
@@ -936,21 +1275,45 @@ async def asset(request):
     if not os.path.isfile(path):
         raise web.HTTPNotFound()
 
-    return web.FileResponse(path, headers=NO_CACHE)
+    return web.FileResponse(
+        path,
+        headers=NO_CACHE
+    )
 
 
 async def health(request):
-    return web.json_response({"ok": True})
+    return web.json_response({
+        "ok": True
+    })
 
 
-# ---------------------------------------------------------------- تحميل برنامج Agent
+# ----------------------------------------------------------------
+# تحميل برنامج Agent
+# ----------------------------------------------------------------
 
 async def download_agent(request):
-    path = os.path.join(BASE_DIR, "agent.exe")
+    path = os.path.join(
+        BASE_DIR,
+        "agent.exe"
+    )
 
-    print("[DOWNLOAD] BASE_DIR:", BASE_DIR, flush=True)
-    print("[DOWNLOAD] FILE:", path, flush=True)
-    print("[DOWNLOAD] EXISTS:", os.path.isfile(path), flush=True)
+    print(
+        "[DOWNLOAD] BASE_DIR:",
+        BASE_DIR,
+        flush=True
+    )
+
+    print(
+        "[DOWNLOAD] FILE:",
+        path,
+        flush=True
+    )
+
+    print(
+        "[DOWNLOAD] EXISTS:",
+        os.path.isfile(path),
+        flush=True
+    )
 
     if not os.path.isfile(path):
         raise web.HTTPNotFound(
@@ -966,15 +1329,23 @@ async def download_agent(request):
     )
 
 
-# ---------------------------------------------------------------- إدارة التراخيص
+# ----------------------------------------------------------------
+# إدارة التراخيص
+# ----------------------------------------------------------------
 
-ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
+ADMIN_TOKEN = os.environ.get(
+    "ADMIN_TOKEN",
+    ""
+).strip()
 
 
 async def admin_run(request):
     if len(ADMIN_TOKEN) < 16:
         return web.json_response(
-            {"ok": False, "error": "disabled"},
+            {
+                "ok": False,
+                "error": "disabled"
+            },
             status=404
         )
 
@@ -982,11 +1353,17 @@ async def admin_run(request):
 
     if over("admin_fail", ip, 5, 900):
         return web.json_response(
-            {"ok": False, "error": "rate_limited"},
+            {
+                "ok": False,
+                "error": "rate_limited"
+            },
             status=429
         )
 
-    auth = request.headers.get("Authorization", "")
+    auth = request.headers.get(
+        "Authorization",
+        ""
+    )
 
     if not hmac.compare_digest(
         auth.encode(),
@@ -995,7 +1372,10 @@ async def admin_run(request):
         record("admin_fail", ip)
 
         return web.json_response(
-            {"ok": False, "error": "unauthorized"},
+            {
+                "ok": False,
+                "error": "unauthorized"
+            },
             status=401
         )
 
@@ -1010,11 +1390,16 @@ async def admin_run(request):
 
     except Exception:
         return web.json_response(
-            {"ok": False, "error": "bad_request"},
+            {
+                "ok": False,
+                "error": "bad_request"
+            },
             status=400
         )
 
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = os.path.dirname(
+        os.path.abspath(__file__)
+    )
 
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -1022,7 +1407,10 @@ async def admin_run(request):
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
-        env={**os.environ, "RC_ADMIN_URL": ""}
+        env={
+            **os.environ,
+            "RC_ADMIN_URL": ""
+        }
     )
 
     out, _ = await asyncio.wait_for(
@@ -1032,14 +1420,27 @@ async def admin_run(request):
 
     return web.json_response({
         "ok": proc.returncode == 0,
-        "output": out.decode("utf-8", "replace")
+        "output": out.decode(
+            "utf-8",
+            "replace"
+        )
     })
 
 
-# ---------------------------------------------------------------- لوحة البائع
+# ----------------------------------------------------------------
+# لوحة البائع
+# ----------------------------------------------------------------
 
-SELLER_USER = os.environ.get("SELLER_USERNAME", "").strip()
-SELLER_PASS = os.environ.get("SELLER_PASSWORD", "")
+SELLER_USER = os.environ.get(
+    "SELLER_USERNAME",
+    ""
+).strip()
+
+SELLER_PASS = os.environ.get(
+    "SELLER_PASSWORD",
+    ""
+)
+
 SELLER_COOKIE = "rc_seller"
 SELLER_TTL = 12 * 3600
 
@@ -1066,11 +1467,18 @@ catch(x){e.textContent='تعذر الاتصال بالسيرفر'}});</script></
 
 
 def seller_enabled():
-    return bool(SELLER_USER) and len(SELLER_PASS) >= 8
+    return (
+        bool(SELLER_USER)
+        and len(SELLER_PASS) >= 8
+    )
 
 
 def seller_authed(request):
-    sid = request.cookies.get(SELLER_COOKIE, "")
+    sid = request.cookies.get(
+        SELLER_COOKIE,
+        ""
+    )
+
     exp = seller_sessions.get(sid)
 
     if exp and exp > time.time():
@@ -1082,7 +1490,11 @@ def seller_authed(request):
 
 def same_origin(request):
     origin = request.headers.get("Origin")
-    return not origin or urlparse(origin).netloc == request.host
+
+    return (
+        not origin
+        or urlparse(origin).netloc == request.host
+    )
 
 
 def seller_json(data, status=200):
@@ -1118,24 +1530,34 @@ async def seller_login(request):
 
     if not same_origin(request):
         return seller_json(
-            {"ok": False, "error": "forbidden"},
+            {
+                "ok": False,
+                "error": "forbidden"
+            },
             403
         )
 
     if over("seller_fail", ip, 5, 900):
         return seller_json(
-            {"ok": False, "error": "rate_limited"},
+            {
+                "ok": False,
+                "error": "rate_limited"
+            },
             429
         )
 
     try:
         d = await request.json()
+
         u = str(d.get("username", ""))
         p = str(d.get("password", ""))
 
     except Exception:
         return seller_json(
-            {"ok": False, "error": "bad_request"},
+            {
+                "ok": False,
+                "error": "bad_request"
+            },
             400
         )
 
@@ -1153,7 +1575,10 @@ async def seller_login(request):
         record("seller_fail", ip)
 
         return seller_json(
-            {"ok": False, "error": "unauthorized"},
+            {
+                "ok": False,
+                "error": "unauthorized"
+            },
             401
         )
 
@@ -1168,11 +1593,15 @@ async def seller_login(request):
 
     seller_sessions[sid] = now + SELLER_TTL
 
-    resp = seller_json({"ok": True})
+    resp = seller_json({
+        "ok": True
+    })
 
     secure = (
-        request.headers.get("X-Forwarded-Proto", request.scheme)
-        == "https"
+        request.headers.get(
+            "X-Forwarded-Proto",
+            request.scheme
+        ) == "https"
     )
 
     resp.set_cookie(
@@ -1194,13 +1623,22 @@ def seller_guard(request):
 
     if not seller_authed(request):
         return seller_json(
-            {"ok": False, "error": "unauthorized"},
+            {
+                "ok": False,
+                "error": "unauthorized"
+            },
             401
         )
 
-    if request.method != "GET" and not same_origin(request):
+    if (
+        request.method != "GET"
+        and not same_origin(request)
+    ):
         return seller_json(
-            {"ok": False, "error": "forbidden"},
+            {
+                "ok": False,
+                "error": "forbidden"
+            },
             403
         )
 
@@ -1222,25 +1660,32 @@ async def seller_list(request):
         )
     )
 
-    out = [{
-        "code": r["code"],
-        "username": r.get("username"),
-        "status": r["status"],
-        "masked_contact": (
-            ldb.mask_contact(r["channel"], r["contact"])
-            if r["contact"] else ""
-        ),
-        "expires_at": r["expires_at"],
-        "created_at": r["created_at"],
-        "agent_name": r.get("agent_name"),
-        "agent_ip": r.get("agent_ip"),
-        "has_pc": bool(r["agent_hash"]),
-        "has_phone": bool(r["phone_token_hash"]),
-        "phone_binds": r["phone_binds"],
-        "online": bool(
-            (rooms.get(r["code"]) or {}).get("agent")
-        )
-    } for r in rows]
+    out = [
+        {
+            "code": r["code"],
+            "username": r.get("username"),
+            "status": r["status"],
+            "masked_contact": (
+                ldb.mask_contact(
+                    r["channel"],
+                    r["contact"]
+                )
+                if r["contact"]
+                else ""
+            ),
+            "expires_at": r["expires_at"],
+            "created_at": r["created_at"],
+            "agent_name": r.get("agent_name"),
+            "agent_ip": r.get("agent_ip"),
+            "has_pc": bool(r["agent_hash"]),
+            "has_phone": bool(r["phone_token_hash"]),
+            "phone_binds": r["phone_binds"],
+            "online": bool(
+                (rooms.get(r["code"]) or {}).get("agent")
+            )
+        }
+        for r in rows
+    ]
 
     return seller_json({
         "ok": True,
@@ -1274,7 +1719,10 @@ async def seller_action(request):
 
     if not row or action not in SELLER_ACTIONS:
         return seller_json(
-            {"ok": False, "error": "not_found"},
+            {
+                "ok": False,
+                "error": "not_found"
+            },
             404
         )
 
@@ -1285,11 +1733,15 @@ async def seller_action(request):
             days = int(
                 (await request.json()).get("days")
             )
+
             assert 1 <= days <= 3650
 
         except Exception:
             return seller_json(
-                {"ok": False, "error": "أدخل عدد أيام من 1 إلى 3650"},
+                {
+                    "ok": False,
+                    "error": "أدخل عدد أيام من 1 إلى 3650"
+                },
                 400
             )
 
@@ -1297,7 +1749,10 @@ async def seller_action(request):
             if action == "activate":
                 c.execute(
                     "UPDATE licenses SET status='active', expires_at=? WHERE code=?",
-                    (now + days * 86400, code)
+                    (
+                        now + days * 86400,
+                        code
+                    )
                 )
 
             else:
@@ -1308,7 +1763,10 @@ async def seller_action(request):
 
                 c.execute(
                     "UPDATE licenses SET expires_at=? WHERE code=?",
-                    (base + days * 86400, code)
+                    (
+                        base + days * 86400,
+                        code
+                    )
                 )
 
     elif action == "revoke":
@@ -1330,13 +1788,18 @@ async def seller_action(request):
                 (code,)
             )
 
-    return seller_json({"ok": True})
+    return seller_json({
+        "ok": True
+    })
 
 
 async def seller_logout(request):
     if not same_origin(request):
         return seller_json(
-            {"ok": False, "error": "forbidden"},
+            {
+                "ok": False,
+                "error": "forbidden"
+            },
             403
         )
 
@@ -1345,23 +1808,50 @@ async def seller_logout(request):
         None
     )
 
-    resp = seller_json({"ok": True})
-    resp.del_cookie(SELLER_COOKIE, path="/")
+    resp = seller_json({
+        "ok": True
+    })
+
+    resp.del_cookie(
+        SELLER_COOKIE,
+        path="/"
+    )
 
     return resp
 
 
-# ---------------------------------------------------------------- تشغيل التطبيق
+# ----------------------------------------------------------------
+# تشغيل التطبيق
+# ----------------------------------------------------------------
 
 def make_app():
     app = web.Application()
 
-    app.router.add_post("/admin/run", admin_run)
+    app.router.add_post(
+        "/admin/run",
+        admin_run
+    )
 
-    app.router.add_get("/seller", seller_page)
-    app.router.add_post("/seller/login", seller_login)
-    app.router.add_post("/seller/logout", seller_logout)
-    app.router.add_get("/seller/api/licenses", seller_list)
+    app.router.add_get(
+        "/seller",
+        seller_page
+    )
+
+    app.router.add_post(
+        "/seller/login",
+        seller_login
+    )
+
+    app.router.add_post(
+        "/seller/logout",
+        seller_logout
+    )
+
+    app.router.add_get(
+        "/seller/api/licenses",
+        seller_list
+    )
+
     app.router.add_post(
         "/seller/api/licenses/{code}/{action}",
         seller_action
@@ -1377,17 +1867,25 @@ def make_app():
         "icon-512.png",
         "icon-512-maskable.png"
     ):
-        app.router.add_get("/" + name, asset)
+        app.router.add_get(
+            "/" + name,
+            asset
+        )
 
-    app.router.add_get("/health", health)
+    app.router.add_get(
+        "/health",
+        health
+    )
 
-    # مسار تحميل برنامج Agent
     app.router.add_get(
         "/download/agent.exe",
         download_agent
     )
 
-    app.router.add_get("/ws", ws_handler)
+    app.router.add_get(
+        "/ws",
+        ws_handler
+    )
 
     app.cleanup_ctx.append(background)
 
@@ -1400,15 +1898,18 @@ def main():
     print("=" * 56)
     print("  السيرفر الوسيط + التراخيص شغّال ✅")
     print("=" * 56)
+
     print(f"  المنفذ: {PORT}")
     print(f"  إرسال الرموز: {otpmod.describe()}")
 
     print(
-        f"  لوحة البائع: {'/seller (مفعّلة)' if seller_enabled() else 'مقفولة (ضع SELLER_USERNAME و SELLER_PASSWORD 8+ أحرف)'}"
+        f"  لوحة البائع: "
+        f"{'/seller (مفعّلة)' if seller_enabled() else 'مقفولة (ضع SELLER_USERNAME و SELLER_PASSWORD 8+ أحرف)'}"
     )
 
     print(
-        f"  وضع التسجيل: {SIGNUP_MODE}  (approval = الحساب ينتظر تفعيلك بعد الدفع | open = فوري)"
+        f"  وضع التسجيل: {SIGNUP_MODE}  "
+        f"(approval = الحساب ينتظر تفعيلك بعد الدفع | open = فوري)"
     )
 
     if otpmod.is_dev_mode():
