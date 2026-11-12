@@ -7,6 +7,8 @@
 - الـ Agent يرتبط بالترخيص وبصمة الجهاز.
 - الجوال يستخدم توكن سري محفوظ لتسجيل الدخول تلقائياً.
 - جوال واحد فقط في نفس الوقت.
+- دعم الصوت المباشر من الكمبيوتر إلى الجوال.
+- دعم اكتشاف الشاشات المتعددة والتنقل بينها.
 
 التشغيل: python relay_server.py
 """
@@ -116,14 +118,16 @@ def locked(code):
 
 async def safe_send(ws, data):
     try:
-        await ws.send_json(data)
+        if ws and not ws.closed:
+            await ws.send_json(data)
     except Exception:
         pass
 
 
 async def safe_close(ws):
     try:
-        await ws.close()
+        if ws and not ws.closed:
+            await ws.close()
     except Exception:
         pass
 
@@ -552,7 +556,6 @@ async def on_resume_login(ws, ip, msg):
             "session_expired"
         )
 
-    # التوكن صحيح والترخيص صالح: استعادة الجلسة
     await start_session(ws, row)
 
 
@@ -810,7 +813,6 @@ async def on_pair_request(ws, ip, msg):
         flush=True
     )
 
-    # مهم: يجب أن يكون إرسال الكود داخل الدالة
     await safe_send(
         ws,
         {
@@ -1062,6 +1064,10 @@ async def on_register_agent(ws, ip, msg):
             )
 
 
+# ----------------------------------------------------------------
+# تنظيف الاتصالات
+# ----------------------------------------------------------------
+
 async def cleanup(ws):
     for code, data in list(pending_pairs.items()):
         if data["ws"] is ws:
@@ -1109,6 +1115,10 @@ async def cleanup(ws):
         r["pending"] = None
 
 
+# ----------------------------------------------------------------
+# تمرير الرسائل بين الجوال والكمبيوتر
+# ----------------------------------------------------------------
+
 async def forward(ws, msg):
     info = ws_info.get(ws)
 
@@ -1121,16 +1131,22 @@ async def forward(ws, msg):
     if not r:
         return
 
+    # أوامر الجوال تذهب إلى الكمبيوتر
     if role == "control" and r.get("agent"):
         await safe_send(r["agent"], msg)
 
+    # رسائل الكمبيوتر ترجع إلى الجوال
     elif (
         role == "agent"
         and r.get("control")
-        and msg.get("type") in ("frame", "audio_frame")
+        and msg.get("type") in (
+            "frame",
+            "audio_frame",
+            "monitors",
+            "monitor_selected",
+        )
     ):
         await safe_send(r["control"], msg)
-        
 
 
 # ----------------------------------------------------------------
