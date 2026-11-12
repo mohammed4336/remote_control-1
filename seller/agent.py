@@ -556,21 +556,22 @@ async def run(
                             "name": name,
                         })
 
-                    try:
-                        async for raw in ws:
-                            if raw.type != aiohttp.WSMsgType.TEXT:
-                                continue
+                   try:
+    async for raw in ws:
+        if raw.type != aiohttp.WSMsgType.TEXT:
+            continue
 
-                            try:
-                                msg = json.loads(raw.data)
-                                if msg.get("type") == "audio_stream":
-                                 audio_streaming["on"] = bool(msg.get("on"))
-                                  continue
+        try:
+            msg = json.loads(raw.data)
+        except json.JSONDecodeError:
+            continue
 
-                            except json.JSONDecodeError:
-                                continue
+        if msg.get("type") == "audio_stream":
+            audio_streaming["on"] = bool(msg.get("on"))
+            print("[AUDIO] Streaming:", audio_streaming["on"], flush=True)
+            continue
 
-                            t = msg.get("type")
+        t = msg.get("type")
 
                             # ---------- Pairing code ----------
                             if t == "pair_code":
