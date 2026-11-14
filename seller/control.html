@@ -325,7 +325,146 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
 }
 @keyframes spin{to{transform:rotate(360deg);}}
 
-@media(max-width:390px){
+/* وضع ملء الشاشة والتحكم العائم */
+#controlScreen.expanded-view{
+  position:fixed;
+  inset:0;
+  z-index:30;
+  width:100%;
+  height:100%;
+  height:100dvh;
+  padding:0;
+  gap:0;
+  background:#000;
+}
+#controlScreen.expanded-view #touchpad{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  border:0;
+  border-radius:0;
+  background:#000;
+}
+#controlScreen.expanded-view #touchpad::before{display:none;}
+#controlScreen.expanded-view .pad-screen-img{
+  object-fit:contain;
+  background:#000;
+}
+#controlScreen.expanded-view .statusbar{
+  position:absolute;
+  top:calc(env(safe-area-inset-top) + 8px);
+  left:calc(env(safe-area-inset-left) + 10px);
+  right:calc(env(safe-area-inset-right) + 10px);
+  z-index:5;
+  width:auto;
+  padding:7px 9px;
+  border-radius:14px;
+  background:rgba(8,12,18,.76);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+}
+#controlScreen.expanded-view .status-title{font-size:12px;}
+#controlScreen.expanded-view .status-sub{display:none;}
+#controlScreen.expanded-view .monitor-select{
+  min-width:88px;
+  max-width:130px;
+  height:32px;
+}
+#controlScreen.expanded-view .fullscreen-btn{
+  border-color:rgba(87,240,201,.4);
+  color:var(--teal);
+}
+#controlScreen.expanded-view .click-row{
+  position:absolute;
+  left:12px;
+  right:12px;
+  bottom:calc(env(safe-area-inset-bottom) + 76px);
+  z-index:5;
+  gap:8px;
+  pointer-events:none;
+}
+#controlScreen.expanded-view .click-btn{
+  pointer-events:auto;
+  padding:11px 8px;
+  border-radius:13px;
+  background:rgba(12,17,24,.78);
+  backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+  font-size:13px;
+}
+#controlScreen.expanded-view .dock{
+  position:absolute;
+  left:10px;
+  right:10px;
+  bottom:calc(env(safe-area-inset-bottom) + 8px);
+  z-index:6;
+  padding:7px 5px;
+  gap:3px;
+  border-radius:16px;
+  background:rgba(12,17,24,.86);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+}
+#controlScreen.expanded-view .dock-btn{
+  min-width:0;
+  padding:7px 1px;
+  gap:3px;
+}
+#controlScreen.expanded-view .dock-btn .ic{font-size:17px;}
+#controlScreen.expanded-view .dock-btn .lb{font-size:9px;}
+#controlScreen.expanded-view .pad-live-badge{
+  top:calc(env(safe-area-inset-top) + 60px);
+  left:12px;
+}
+@media(max-width:520px){
+  #controlScreen.expanded-view .statusbar{
+    gap:5px;
+    left:6px;
+    right:6px;
+  }
+  #controlScreen.expanded-view .status-left{gap:5px;}
+  #controlScreen.expanded-view .status-title{font-size:10px;}
+  #controlScreen.expanded-view .monitor-select{
+    min-width:75px;
+    max-width:105px;
+    padding:0 5px;
+    font-size:10px;
+  }
+  #controlScreen.expanded-view .icon-btn{
+    width:31px;
+    height:31px;
+  }
+  #controlScreen.expanded-view .click-row{
+    left:7px;
+    right:7px;
+    bottom:calc(env(safe-area-inset-bottom) + 69px);
+  }
+  #controlScreen.expanded-view .dock{
+    left:6px;
+    right:6px;
+    bottom:calc(env(safe-area-inset-bottom) + 5px);
+  }
+  #controlScreen.expanded-view .dock-btn .ic{font-size:15px;}
+  #controlScreen.expanded-view .dock-btn .lb{font-size:8px;}
+}
+@media(orientation:landscape) and (max-height:520px){
+  #controlScreen.expanded-view .statusbar{padding:5px 8px;}
+  #controlScreen.expanded-view .click-row{
+    left:auto;
+    right:10px;
+    bottom:calc(env(safe-area-inset-bottom) + 10px);
+    width:190px;
+    flex-direction:column;
+  }
+  #controlScreen.expanded-view .click-btn{padding:8px;}
+  #controlScreen.expanded-view .dock{
+    left:10px;
+    right:210px;
+    bottom:calc(env(safe-area-inset-bottom) + 8px);
+  }
+}
+\n@media(max-width:390px){
   #controlScreen{padding:9px;gap:9px;}
   .statusbar{padding:8px 9px;}
   .monitor-select{max-width:112px;min-width:88px;font-size:11px;}
@@ -456,7 +595,8 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
       <option value="">جاري تحميل الشاشات</option>
     </select>
 
-    <button class="icon-btn" id="disconnectBtn">⏻</button>
+    <button class="icon-btn fullscreen-btn" id="fullscreenBtn" type="button" aria-label="ملء الشاشة" title="ملء الشاشة">⛶</button>
+    <button class="icon-btn" id="disconnectBtn" title="قطع الاتصال">⏻</button>
   </div>
 
   <div id="touchpad">
@@ -650,6 +790,53 @@ const connectScreen = document.getElementById('connectScreen');
 const controlScreen = document.getElementById('controlScreen');
 const errMsg = document.getElementById('errMsg');
 const ipLabel = document.getElementById('ipLabel');
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+function setExpandedView(enabled){
+  controlScreen.classList.toggle('expanded-view', !!enabled);
+  if(fullscreenBtn){
+    fullscreenBtn.textContent = enabled ? '⤢' : '⛶';
+    fullscreenBtn.title = enabled ? 'الخروج من وضع ملء الشاشة' : 'ملء الشاشة';
+    fullscreenBtn.setAttribute('aria-label', fullscreenBtn.title);
+  }
+}
+
+async function toggleFullscreen(){
+  const entering = !controlScreen.classList.contains('expanded-view');
+  if(entering){
+    setExpandedView(true);
+    try{
+      if(document.fullscreenEnabled && !document.fullscreenElement){
+        await controlScreen.requestFullscreen();
+      }
+    }catch(e){
+      // يبقى وضع العرض الموسع فعالاً حتى لو منع المتصفح واجهة Fullscreen API.
+    }
+  }else{
+    setExpandedView(false);
+    try{
+      if(document.fullscreenElement && document.exitFullscreen){
+        await document.exitFullscreen();
+      }
+    }catch(e){}
+  }
+}
+
+if(fullscreenBtn){
+  fullscreenBtn.addEventListener('click',toggleFullscreen);
+}
+
+document.addEventListener('fullscreenchange',()=>{
+  if(!document.fullscreenElement && controlScreen.classList.contains('expanded-view')){
+    setExpandedView(false);
+  }
+});
+
+document.addEventListener('keydown',(e)=>{
+  if(e.key==='Escape' && controlScreen.classList.contains('expanded-view')){
+    setExpandedView(false);
+  }
+});
 
 function showToast(text){
   const t = document.getElementById('toast');
@@ -774,6 +961,7 @@ function renderPc(pc){
 
 function backToLogin(info){
   authed = false;
+  setExpandedView(false);
   controlScreen.style.display = 'none';
   connectScreen.style.display = 'flex';
   $('loginUser').value = acc?acc.username:$('loginUser').value;
@@ -805,6 +993,7 @@ async function keepAwake(on){
 function leaveControl(){
   authed = false;
   resuming = false;
+  setExpandedView(false);
   controlScreen.style.display = 'none';
   connectScreen.style.display = 'flex';
   keepAwake(false);
