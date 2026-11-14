@@ -375,6 +375,55 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
   border-color:rgba(87,240,201,.4);
   color:var(--teal);
 }
+/* أدوات التحكم مخفية افتراضياً في ملء الشاشة */
+#controlScreen.expanded-view .click-row,
+#controlScreen.expanded-view .dock{
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+  transform:translateY(18px);
+  transition:opacity .2s ease, transform .2s ease, visibility .2s ease;
+}
+#controlScreen.expanded-view.controls-visible .click-row,
+#controlScreen.expanded-view.controls-visible .dock{
+  opacity:1;
+  visibility:visible;
+  pointer-events:auto;
+  transform:translateY(0);
+}
+#controlScreen.expanded-view .controls-reveal-handle{
+  position:absolute;
+  z-index:12;
+  left:50%;
+  bottom:calc(env(safe-area-inset-bottom) + 9px);
+  transform:translateX(-50%);
+  width:76px;
+  height:28px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border:1px solid rgba(255,255,255,.22);
+  border-radius:18px;
+  background:rgba(10,14,20,.58);
+  backdrop-filter:blur(10px);
+  -webkit-backdrop-filter:blur(10px);
+  cursor:grab;
+  touch-action:none;
+}
+#controlScreen.expanded-view .controls-reveal-handle span{
+  width:34px;
+  height:4px;
+  border-radius:5px;
+  background:rgba(255,255,255,.72);
+}
+#controlScreen.expanded-view.controls-visible .controls-reveal-handle{
+  bottom:calc(env(safe-area-inset-bottom) + 8px);
+  background:rgba(87,240,201,.18);
+  border-color:rgba(87,240,201,.45);
+}
+#controlScreen.expanded-view.controls-visible .controls-reveal-handle span{
+  background:var(--teal);
+}
 #controlScreen.expanded-view .click-row{
   position:absolute;
   left:12px;
@@ -637,6 +686,8 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
     </div>
   </div>
 
+  <button id="controlsRevealHandle" class="controls-reveal-handle" type="button" aria-label="إظهار أدوات التحكم" title="اسحب للأعلى لإظهار أدوات التحكم"><span></span></button>
+
   <div class="click-row">
     <div class="click-btn" id="rightClickBtn">كليك يمين</div>
     <div class="click-btn" id="leftClickBtn">كليك يسار</div>
@@ -823,6 +874,7 @@ const fullscreenBtn = document.getElementById('fullscreenBtn');
 
 function setExpandedView(enabled){
   controlScreen.classList.toggle('expanded-view', !!enabled);
+  if(!enabled) controlScreen.classList.remove('controls-visible');
   if(fullscreenBtn){
     fullscreenBtn.textContent = enabled ? '⤢' : '⛶';
     fullscreenBtn.title = enabled ? 'الخروج من وضع ملء الشاشة' : 'ملء الشاشة';
@@ -853,6 +905,32 @@ async function toggleFullscreen(){
 
 if(fullscreenBtn){
   fullscreenBtn.addEventListener('click',toggleFullscreen);
+}
+
+/* إظهار/إخفاء أدوات التحكم بالسحب من المقبض الصغير أسفل الشاشة */
+const controlsRevealHandle = document.getElementById('controlsRevealHandle');
+let controlsGestureStartY = null;
+function setControlsVisible(visible){
+  controlScreen.classList.toggle('controls-visible', !!visible);
+  if(controlsRevealHandle){
+    controlsRevealHandle.setAttribute('aria-label', visible ? 'إخفاء أدوات التحكم' : 'إظهار أدوات التحكم');
+    controlsRevealHandle.title = visible ? 'اسحب للأسفل لإخفاء أدوات التحكم' : 'اسحب للأعلى لإظهار أدوات التحكم';
+  }
+}
+if(controlsRevealHandle){
+  controlsRevealHandle.addEventListener('pointerdown',(e)=>{
+    controlsGestureStartY = e.clientY;
+    try{ controlsRevealHandle.setPointerCapture(e.pointerId); }catch(err){}
+  });
+  controlsRevealHandle.addEventListener('pointerup',(e)=>{
+    if(controlsGestureStartY===null) return;
+    const deltaY = e.clientY-controlsGestureStartY;
+    if(deltaY < -12) setControlsVisible(true);
+    else if(deltaY > 12) setControlsVisible(false);
+    else setControlsVisible(!controlScreen.classList.contains('controls-visible'));
+    controlsGestureStartY = null;
+  });
+  controlsRevealHandle.addEventListener('pointercancel',()=>{controlsGestureStartY=null;});
 }
 
 document.addEventListener('fullscreenchange',()=>{
