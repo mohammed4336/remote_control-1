@@ -523,33 +523,75 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
   .dock-btn .ic{font-size:16px;}
   .dock-btn .lb{font-size:8.5px;}
 }
-/* إصلاح وضع ملء الشاشة: حجز مساحة مستقلة للصورة بعيداً عن الأزرار */
-#controlScreen.expanded-view .pad-screen-img{
-  top:58px;
-  bottom:142px;
-  left:0;
-  right:0;
+/* توسيط بث الشاشة على كامل المساحة المتاحة */
+#controlScreen.expanded-view #touchpad{
+  position:absolute;
+  inset:0;
   width:100%;
-  height:calc(100% - 200px);
-  max-width:100%;
-  max-height:none;
-  object-fit:contain;
+  height:100%;
+  margin:0;
+  border:0;
+  border-radius:0;
+  overflow:hidden;
+  background:#000;
 }
-@media(max-width:520px){
-  #controlScreen.expanded-view .pad-screen-img{
-    top:54px;
-    bottom:132px;
-    height:calc(100% - 186px);
-  }
+#controlScreen.expanded-view .pad-screen-img{
+  position:absolute;
+  inset:0;
+  display:none;
+  width:100%;
+  height:100%;
+  max-width:none;
+  max-height:none;
+  margin:auto;
+  object-fit:contain;
+  object-position:center center;
+  background:#000;
+}
+
+/* مقبض هادئ وصغير، مع مساحة لمس كافية */
+#controlScreen.expanded-view .controls-reveal-handle{
+  left:50%;
+  bottom:calc(env(safe-area-inset-bottom) + 5px);
+  width:54px;
+  height:18px;
+  padding:0;
+  border:0;
+  border-radius:999px;
+  background:rgba(18,22,29,.20);
+  opacity:.22;
+  box-shadow:none;
+  backdrop-filter:blur(5px);
+  -webkit-backdrop-filter:blur(5px);
+  transition:opacity .2s ease, background .2s ease;
+}
+#controlScreen.expanded-view .controls-reveal-handle span{
+  width:22px;
+  height:3px;
+  background:rgba(255,255,255,.72);
+}
+#controlScreen.expanded-view .controls-reveal-handle:active,
+#controlScreen.expanded-view .controls-reveal-handle:focus-visible{
+  opacity:.9;
+  background:rgba(18,22,29,.78);
+  outline:1px solid rgba(87,240,201,.5);
+}
+#controlScreen.expanded-view.controls-visible .controls-reveal-handle{
+  bottom:calc(env(safe-area-inset-bottom) + 5px);
+  width:54px;
+  height:18px;
+  opacity:.8;
+  background:rgba(18,22,29,.72);
+}
+#controlScreen.expanded-view.controls-visible .controls-reveal-handle span{
+  background:var(--teal);
 }
 @media(orientation:landscape) and (max-height:520px){
   #controlScreen.expanded-view .pad-screen-img{
-    top:48px;
-    bottom:0;
-    left:0;
-    right:210px;
-    width:calc(100% - 210px);
-    height:calc(100% - 48px);
+    inset:0;
+    width:100%;
+    height:100%;
+    object-fit:contain;
   }
 }
 </style>
