@@ -786,7 +786,7 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
   </div>
   <div id="qualityPanel" class="glass" style="display:none;padding:10px;border-radius:13px;gap:8px;align-items:center;flex-wrap:wrap">
     <label style="font-size:12px">الجودة <select id="qualityLevel"><option value="low">اقتصادي</option><option value="medium" selected>متوازن</option><option value="high">عالٍ</option></select></label>
-    <label style="font-size:12px">FPS <select id="fpsLevel"><option>10</option><option selected>20</option><option>30</option><option>60</option></select></label>
+    <label style="font-size:12px">FPS <select id="fpsLevel"><option>10</option><option>20</option><option selected>30</option><option>60</option></select></label>
     <button class="icon-btn" id="applyQuality" type="button">تطبيق</button>
   </div>
 
@@ -1070,6 +1070,7 @@ function showToast(text){
 let rtcPeer = null;
 let webrtcAnswerTimer = null;
 let pendingIceConfig = [{urls:'stun:stun.l.google.com:19302'}];
+let iceConfigWaiter = null;
 let legacyStreamFallback = false;
 
 function waitForIceGathering(pc, timeoutMs=10000){
@@ -1117,7 +1118,10 @@ async function startWebRTCStream(){
   }
   try{
     send({type:'ice_config'});
-    await new Promise(resolve=>setTimeout(resolve,250));
+    await new Promise(resolve=>{
+      const timer=setTimeout(()=>{iceConfigWaiter=null;resolve();},1200);
+      iceConfigWaiter=()=>{clearTimeout(timer);resolve();};
+    });
     rtcPeer=new RTCPeerConnection({iceServers:pendingIceConfig});
     rtcPeer.addTransceiver('video',{direction:'recvonly'});
     rtcPeer.ontrack=async event=>{
@@ -1551,7 +1555,7 @@ function onMessage(ev){
   }else if(t==='webrtc_answer'){
     if(rtcPeer){
       clearTimeout(webrtcAnswerTimer);
-      rtcPeer.setRemoteDescription({type:msg.type,sdp:msg.sdp}).catch(e=>{
+      rtcPeer.setRemoteDescription({type:msg.sdp_type||'answer',sdp:msg.sdp}).catch(e=>{
         console.error('WebRTC answer error',e);
         fallbackToLegacyStream('تعذر إنشاء اتصال الفيديو');
       });
@@ -1562,6 +1566,7 @@ function onMessage(ev){
 
   }else if(t==='ice_config'){
     pendingIceConfig = msg.iceServers || [{urls:'stun:stun.l.google.com:19302'}];
+    if(iceConfigWaiter){iceConfigWaiter();iceConfigWaiter=null;}
 
   }else if(t==='frame'){
     const img = $('padScreenImg');
