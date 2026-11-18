@@ -6,6 +6,8 @@ as a compatibility fallback. Frames are sent as a real-time video track rather
 than JPEG/Base64 messages through the relay.
 """
 import asyncio
+import ctypes
+from ctypes import wintypes
 import logging
 import time
 from fractions import Fraction
@@ -96,6 +98,30 @@ class DesktopVideoTrack(VideoStreamTrack):
         self._last_capture = time.monotonic()
         return np.ascontiguousarray(frame, dtype=np.uint8)
 
+    def _draw_cursor(self, frame):
+        if not self.monitor_rect:
+            return frame
+        try:
+            point = wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+            left, top, right, bottom = self.monitor_rect
+            x = point.x - left
+            y = point.y - top
+            if not (0 <= x < right - left and 0 <= y < bottom - top):
+                return frame
+            scale = frame.shape[1] / max(1, right - left)
+            x, y = int(x * scale), int(y * scale)
+            from PIL import Image, ImageDraw
+            image = Image.fromarray(frame)
+            draw = ImageDraw.Draw(image)
+            points = [(x, y), (x, y + 16), (x + 4, y + 12),
+                      (x + 8, y + 20), (x + 11, y + 18),
+                      (x + 7, y + 11), (x + 13, y + 11)]
+            draw.polygon(points, fill="white", outline="black")
+            return np.asarray(image, dtype=np.uint8)
+        except Exception:
+            return frame
+
     async def recv(self):
         # aiortc's base VideoStreamTrack is fixed at 30 FPS. Use a 90 kHz
         # media clock so the selected 30/60 FPS target is honored.
@@ -113,7 +139,8 @@ class DesktopVideoTrack(VideoStreamTrack):
         time_base = Fraction(1, 90000)
         # DXcam runs its own capture thread; only the newest frame is read.
         frame = await asyncio.to_thread(self._capture)
-        video = VideoFrame.from_ndarray(frame, format="rgb24")
+        frame = self._draw_cursor(frame)
+        video = VideoFrame.from_ndarray(np.ascontiguousarray(frame), format="rgb24")
         video.pts = pts
         video.time_base = time_base
         return video
