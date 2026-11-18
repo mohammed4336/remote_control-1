@@ -1357,9 +1357,10 @@ function maskedLabel(el,prefix,masked){
 
 function renderPc(pc){
   pcOnline = !!(pc && pc.online);
+  const wakeBridgeOnline = !!(pc && pc.wake_bridge);
   $('pcName').textContent = (pc && pc.name)?pc.name:'جهازك';
-  $('pcState').textContent = pcOnline?'🟢 متصل ومستعد':'⚪ غير متصل — شغّل البرنامج على الكمبيوتر';
-  $('connectPcBtn').disabled = !pcOnline;
+  $('pcState').textContent = pcOnline?'🟢 متصل ومستعد':(wakeBridgeOnline?'🟡 وسيط التشغيل متصل — الكمبيوتر مطفأ':'⚪ غير متصل — شغّل البرنامج أو وسيط التشغيل');
+  $('connectPcBtn').disabled = !(pcOnline || wakeBridgeOnline);
   $('pairBox').style.display = pcOnline?'none':'';
 }
 
