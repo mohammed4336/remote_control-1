@@ -10,7 +10,8 @@ import logging
 import time
 
 import numpy as np
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer, RTCSessionDescription, VideoStreamTrack
+import os
 from aiortc.contrib.media import MediaRelay
 from av import VideoFrame
 
@@ -108,7 +109,17 @@ class DesktopVideoTrack(VideoStreamTrack):
 
 async def answer_offer(sdp, sdp_type, monitor_index=0, fps=30, width=1280, monitor_rect=None):
     """Create an aiortc peer and return (peer, track, answer SDP)."""
-    pc = RTCPeerConnection()
+    ice_servers = [RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+    turn_url = os.environ.get("RC_TURN_URL", "").strip()
+    turn_user = os.environ.get("RC_TURN_USERNAME", "").strip()
+    turn_credential = os.environ.get("RC_TURN_CREDENTIAL", "").strip()
+    if turn_url and turn_user and turn_credential:
+        ice_servers.append(RTCIceServer(
+            urls=[turn_url],
+            username=turn_user,
+            credential=turn_credential,
+        ))
+    pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
     track = DesktopVideoTrack(
         monitor_index=monitor_index,
         fps=fps,
