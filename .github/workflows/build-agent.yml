@@ -1,69 +1,69 @@
-name: Build Agent EXE - Full Dependencies
-
+name: Build and Publish Agent
 on:
   workflow_dispatch:
-
+    inputs:
+      version:
+        description: "Release version (must match APP_VERSION in seller/agent.py)"
+        required: true
+        default: "1.0.1"
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
+          python-version: "3.11"
       - name: Install dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install pyinstaller aiohttp pyautogui Pillow soundcard numpy
-
-      - name: Verify dependencies
+      - name: Verify dependencies and release version
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           python -c "import aiohttp, pyautogui, soundcard, numpy; from PIL import Image, ImageDraw, ImageGrab; print('ALL DEPENDENCIES OK')"
-
-      - name: Locate agent.py
-        shell: pwsh
-        run: |
-          $agent = Get-ChildItem -Path . -Filter agent.py -Recurse -File |
-            Where-Object { $_.FullName -notmatch '\\\\(build|dist|\.venv|venv)\\\\' } |
-            Select-Object -First 1
-
-          if (-not $agent) {
-            throw "agent.py was not found"
-          }
-
-          Write-Host "Building from: $($agent.FullName)"
-          "AGENT_PATH=$($agent.FullName)" >> $env:GITHUB_ENV
-
+          $agent = Get-Content -Raw "seller/agent.py"
+          $match = [regex]::Match($agent, 'APP_VERSION\s*=\s*["'']([^"'']+)["'']')
+          if (-not $match.Success) { throw "APP_VERSION was not found in seller/agent.py" }
+          if ($match.Groups[1].Value -ne $env:RELEASE_VERSION) { throw "Workflow version $env:RELEASE_VERSION does not match APP_VERSION $($match.Groups[1].Value)" }
       - name: Build EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --clean --noconfirm --onefile --console --name agent `
-            --collect-all aiohttp `
-            --collect-all pyautogui `
-            --collect-all PIL `
-            --collect-all soundcard `
-            --collect-all numpy `
-            --hidden-import=soundcard.mediafoundation `
-            "$env:AGENT_PATH"
-
-      - name: Verify EXE
+          python -m PyInstaller --clean --noconfirm --onefile --console --name agent --paths seller --collect-all aiohttp --collect-all pyautogui --collect-all PIL --collect-all soundcard --collect-all numpy --hidden-import=soundcard.mediafoundation --hidden-import=updater seller/agent.py
+      - name: Verify EXE and create update manifest
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          if (-not (Test-Path "dist/agent.exe")) {
-            throw "Build failed: dist/agent.exe was not created"
-          }
+          if (-not (Test-Path "dist/agent.exe")) { throw "Build failed: dist/agent.exe was not created" }
+          $hash = (Get-FileHash "dist/agent.exe" -Algorithm SHA256).Hash.ToLower()
+          $manifest = @{ version = $env:RELEASE_VERSION; filename = "agent.exe"; sha256 = $hash } | ConvertTo-Json -Compress
+          Set-Content -Path "dist/update.json" -Value $manifest -NoNewline -Encoding utf8
           Get-Item "dist/agent.exe" | Select-Object Name, Length
-
-      - name: Upload EXE
+          Get-Content "dist/update.json"
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: agent-exe-full
-          path: dist/agent.exe
+          name: agent-${{ inputs.version }}
+          path: |
+            dist/agent.exe
+            dist/update.json
           if-no-files-found: error
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Remote Control Agent v${{ inputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/agent.exe
+            dist/update.json
+          fail_on_unmatched_files: true

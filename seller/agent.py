@@ -21,6 +21,9 @@ import soundcard as sc
 import numpy as np
 
 from PIL import Image, ImageDraw, ImageGrab
+from updater import start_auto_updater
+
+APP_VERSION = "1.0.1"
 
 
 # =========================================================
@@ -448,7 +451,7 @@ def handle_command(msg: dict):
         # Values are clamped to protect CPU and bandwidth.
         stream_settings["width"] = max(480, min(1920, int(msg.get("width", 800))))
         stream_settings["quality"] = max(35, min(90, int(msg.get("quality", 60))))
-        stream_settings["fps"] = max(5, min(30, int(msg.get("fps", 20))))
+        stream_settings["fps"] = max(5, min(60, int(msg.get("fps", 20))))
         print("[SCREEN] Quality:", stream_settings, flush=True)
 
     elif t == "stream":
@@ -549,13 +552,27 @@ async def frame_sender(ws):
         took = loop.time() - t0
         rtt = flow["rtt"]
 
+        # Persist adaptive changes; local-only values were overwritten at
+        # the start of the next loop and therefore had no lasting effect.
         if took > 0.35 or rtt > 0.7:
-            width = max(520, width - 100)
-            quality = max(38, quality - 6)
+            stream_settings["width"] = max(
+                480, int(stream_settings["width"] * 0.90)
+            )
+            stream_settings["quality"] = max(
+                35, stream_settings["quality"] - 4
+            )
 
-        elif took < 0.12 and rtt < 0.3 and width < 900:
-            width = min(900, width + 40)
-            quality = min(70, quality + 3)
+        elif (
+            took < 0.12
+            and rtt < 0.3
+            and stream_settings["width"] < 900
+        ):
+            stream_settings["width"] = min(
+                900, stream_settings["width"] + 40
+            )
+            stream_settings["quality"] = min(
+                70, stream_settings["quality"] + 3
+            )
 
         target_fps = stream_settings["fps"]
         await asyncio.sleep(max(0.005, 1 / target_fps - took))
@@ -1228,6 +1245,7 @@ async def run(
 
 def main():
 
+    start_auto_updater(APP_VERSION)
     cfg = load_config()
 
     relay = (
