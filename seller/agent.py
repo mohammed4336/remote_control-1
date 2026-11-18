@@ -1204,7 +1204,7 @@ async def run(
                                         monitor_rect=monitor_rect,
                                     )
                                     streaming["on"] = False
-                                    await ws.send_json({"type": "webrtc_answer", **answer})
+                                    await ws.send_json({"type": "webrtc_answer", "sdp_type": answer["type"], "sdp": answer["sdp"]})
                                     print("[WEBRTC] Video peer negotiated", flush=True)
                                 except Exception as e:
                                     print("[WEBRTC] Negotiation failed:", e, flush=True)
