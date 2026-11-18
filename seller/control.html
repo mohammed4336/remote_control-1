@@ -873,6 +873,14 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
         </div>
       </div>
     </div>
+    <div style="margin:14px 0;padding:14px;border:1px solid rgba(255,255,255,.14);border-radius:14px">
+      <div style="font-weight:700;margin-bottom:8px">⚡ تشغيل الكمبيوتر عن بُعد</div>
+      <div style="font-size:12px;opacity:.75;margin-bottom:10px">يتطلب Wake Bridge يعمل داخل شبكة المنزل، ويدعم الجهاز Wake-on-LAN.</div>
+      <input id="wakeMac" type="text" maxlength="17" placeholder="MAC Address مثال: AA:BB:CC:DD:EE:FF" autocomplete="off" style="width:100%;box-sizing:border-box;margin:5px 0;padding:12px;border-radius:10px;background:rgba(0,0,0,.22);color:inherit;border:1px solid rgba(255,255,255,.2)">
+      <input id="wakeBroadcast" type="text" maxlength="15" value="255.255.255.255" placeholder="Broadcast IP" autocomplete="off" style="width:100%;box-sizing:border-box;margin:5px 0;padding:12px;border-radius:10px;background:rgba(0,0,0,.22);color:inherit;border:1px solid rgba(255,255,255,.2)">
+      <button class="btn" id="wakePcBtn" style="width:100%;margin-top:7px">إرسال أمر التشغيل</button>
+      <div style="font-size:11px;opacity:.65;margin-top:8px">لا تفتح منافذ في الراوتر. اربط Wake Bridge من جهاز آخر دائم التشغيل داخل المنزل.</div>
+    </div>
     <button class="btn ghost" id="powerClose">إغلاق</button>
   </div>
 </div>
@@ -1593,6 +1601,14 @@ function onMessage(ev){
       renderPc({online:true,name:msg.name||$('pcName').textContent});
     }
 
+  }else if(t==='wake_bridge_online'){
+    showToast('وسيط التشغيل متصل');
+  }else if(t==='wake_bridge_offline'){
+    showToast('وسيط التشغيل غير متصل');
+  }else if(t==='wake_result'){
+    if(msg.ok) showToast('تم إرسال إشارة التشغيل. انتظر قليلًا لبدء الكمبيوتر.');
+    else if(msg.reason==='bridge_offline') showToast('وسيط التشغيل غير متصل داخل المنزل');
+    else showToast('تعذر إرسال أمر التشغيل: '+(msg.reason||'خطأ'));
   }else if(t==='monitors'){
     renderMonitors(msg.monitors || []);
 
@@ -2100,6 +2116,15 @@ document.querySelector('[data-action="power"]').addEventListener('click',()=>{
 
 document.getElementById('powerClose').addEventListener('click',()=>{
   document.getElementById('powerOverlay').classList.remove('show');
+});
+document.getElementById('wakePcBtn').addEventListener('click',()=>{
+  const mac=document.getElementById('wakeMac').value.trim().toLowerCase();
+  const broadcast=document.getElementById('wakeBroadcast').value.trim() || '255.255.255.255';
+  if(!/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)){showToast('اكتب MAC Address صحيحًا');return;}
+  const octets=broadcast.split('.');
+  if(octets.length!==4 || octets.some(x=>!/^\d{1,3}$/.test(x)||Number(x)>255)){showToast('عنوان Broadcast غير صحيح');return;}
+  send({type:'wake_pc',mac,broadcast});
+  showToast('جاري إرسال أمر التشغيل...');
 });
 
 document.getElementById('streamToggleBtn').addEventListener('click',()=>{
