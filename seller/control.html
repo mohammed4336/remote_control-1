@@ -375,7 +375,21 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
   border-color:rgba(87,240,201,.4);
   color:var(--teal);
 }
-/* أدوات التحكم مخفية افتراضياً في ملء الشاشة */
+/* الشريط العلوي وأدوات التحكم تختفي وتظهر مع المقبض */
+#controlScreen.expanded-view .statusbar{
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+  transform:translateY(-14px);
+  transition:opacity .2s ease, transform .2s ease, visibility .2s ease;
+}
+#controlScreen.expanded-view.controls-visible .statusbar{
+  opacity:1;
+  visibility:visible;
+  pointer-events:auto;
+  transform:translateY(0);
+}
+/* أزرار التحكم مخفية افتراضياً في ملء الشاشة */
 #controlScreen.expanded-view .click-row,
 #controlScreen.expanded-view .dock{
   opacity:0;
