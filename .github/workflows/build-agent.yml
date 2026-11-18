@@ -1,4 +1,3 @@
-
 name: Build Agent EXE - Full Dependencies
 
 on:
@@ -31,16 +30,36 @@ jobs:
       - name: Locate agent.py
         shell: pwsh
         run: |
-          $agent = Get-ChildItem -Path . -Filter agent.py -Recurse -File | Select-Object -First 1
+          $agent = Get-ChildItem -Path . -Filter agent.py -Recurse -File |
+            Where-Object { $_.FullName -notmatch '\\\\(build|dist|\.venv|venv)\\\\' } |
+            Select-Object -First 1
+
           if (-not $agent) {
             throw "agent.py was not found"
           }
+
+          Write-Host "Building from: $($agent.FullName)"
           "AGENT_PATH=$($agent.FullName)" >> $env:GITHUB_ENV
 
       - name: Build EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --clean --noconfirm --onefile --console --name agent --collect-all aiohttp --collect-all pyautogui --collect-all PIL --collect-all soundcard --collect-all numpy --hidden-import=soundcard.mediafoundation "$env:AGENT_PATH"
+          python -m PyInstaller --clean --noconfirm --onefile --console --name agent `
+            --collect-all aiohttp `
+            --collect-all pyautogui `
+            --collect-all PIL `
+            --collect-all soundcard `
+            --collect-all numpy `
+            --hidden-import=soundcard.mediafoundation `
+            "$env:AGENT_PATH"
+
+      - name: Verify EXE
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/agent.exe")) {
+            throw "Build failed: dist/agent.exe was not created"
+          }
+          Get-Item "dist/agent.exe" | Select-Object Name, Length
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
