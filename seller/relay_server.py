@@ -1122,6 +1122,7 @@ async def cleanup(ws):
 async def forward(ws, msg):
     info = ws_info.get(ws)
 
+
     if not info:
         return
 
@@ -1136,18 +1137,16 @@ async def forward(ws, msg):
         await safe_send(r["agent"], msg)
 
     # رسائل الكمبيوتر ترجع إلى الجوال
-elif (
-    role == "agent"
-    and r.get("control")
-    and msg.get("type") in (
-        "frame",
-        "audio_frame",
-        "monitors",
-        "monitor_selected",
-        "clipboard_result",
-        "screenshot_result",
-    )
-):
+    elif (
+        role == "agent"
+        and r.get("control")
+        and msg.get("type") in (
+            "frame",
+            "audio_frame",
+            "monitors",
+            "monitor_selected",
+            "clipboard_result",
+            "screenshot_result",
         )
     ):
         await safe_send(r["control"], msg)
@@ -1158,6 +1157,7 @@ elif (
 # ----------------------------------------------------------------
 
 HANDLERS = {
+
     "pair_request": on_pair_request,
     "pair_confirm": on_pair_confirm,
 
