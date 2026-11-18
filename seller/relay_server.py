@@ -671,7 +671,7 @@ async def on_connect_pc(ws, ip, msg):
     code = info[0]
     r = rooms.get(code)
 
-    if not r or not r.get("agent"):
+    if not r or not (r.get("agent") or (r.get("wake_bridge") and not r["wake_bridge"].closed)):
         return await fail(
             ws,
             "auth_result",
@@ -688,13 +688,14 @@ async def on_connect_pc(ws, ip, msg):
     r["control"] = ws
     ws_info[ws] = (code, "control")
 
-    await safe_send(
-        r["agent"],
-        {
-            "type": "controller",
-            "connected": True
-        }
-    )
+    if r.get("agent"):
+        await safe_send(
+            r["agent"],
+            {
+                "type": "controller",
+                "connected": True
+            }
+        )
 
     await reply(
         ws,
