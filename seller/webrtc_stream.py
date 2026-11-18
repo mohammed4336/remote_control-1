@@ -8,6 +8,7 @@ than JPEG/Base64 messages through the relay.
 import asyncio
 import logging
 import time
+from fractions import Fraction
 
 import numpy as np
 from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer, RTCSessionDescription, VideoStreamTrack
@@ -26,8 +27,9 @@ class DesktopVideoTrack(VideoStreamTrack):
         self.monitor_rect = monitor_rect
         self.camera = None
         self._dxcam = False
-        self._last_frame = None
         self._last_capture = 0.0
+        self._video_pts = 0
+        self._video_started = None
 
     def _start_camera(self):
         try:
@@ -84,11 +86,23 @@ class DesktopVideoTrack(VideoStreamTrack):
                     dtype=np.uint8,
                 )
         self._last_capture = time.monotonic()
-        self._last_frame = frame
-        return frame
+        return np.ascontiguousarray(frame, dtype=np.uint8)
 
     async def recv(self):
-        pts, time_base = await self.next_timestamp()
+        # aiortc's base VideoStreamTrack is fixed at 30 FPS. Use a 90 kHz
+        # media clock so the selected 30/60 FPS target is honored.
+        interval = 90000 // self.fps
+        if self._video_started is None:
+            self._video_started = time.monotonic()
+        else:
+            self._video_pts += interval
+            deadline = self._video_started + (self._video_pts / 90000)
+            delay = deadline - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+        pts = self._video_pts
+        time_base = Fraction(1, 90000)
         # DXcam runs its own capture thread; only the newest frame is read.
         frame = await asyncio.to_thread(self._capture)
         video = VideoFrame.from_ndarray(frame, format="rgb24")
