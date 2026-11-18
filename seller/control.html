@@ -13,7 +13,9 @@
 <meta name="apple-mobile-web-app-title" content="تحكم بعيد">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet"></noscript>
 
 <style>
 :root{
@@ -784,12 +786,13 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
   </div>
   <div id="qualityPanel" class="glass" style="display:none;padding:10px;border-radius:13px;gap:8px;align-items:center;flex-wrap:wrap">
     <label style="font-size:12px">الجودة <select id="qualityLevel"><option value="low">اقتصادي</option><option value="medium" selected>متوازن</option><option value="high">عالٍ</option></select></label>
-    <label style="font-size:12px">FPS <select id="fpsLevel"><option>10</option><option selected>20</option><option>30</option><option>60</option></select></label>
+    <label style="font-size:12px">FPS <select id="fpsLevel"><option>10</option><option>20</option><option selected>30</option><option>60</option></select></label>
     <button class="icon-btn" id="applyQuality" type="button">تطبيق</button>
   </div>
 
   <div id="touchpad">
     <img id="padScreenImg" class="pad-screen-img">
+    <video id="padScreenVideo" class="pad-screen-img" autoplay playsinline muted style="display:none"></video>
     <div class="pad-live-badge" id="liveBadge"><span class="dot"></span><span>مباشر</span></div>
     <div class="pad-hint" id="padHint">
       <b>حرّك إصبعك للتحكم بالماوس</b>
@@ -1062,6 +1065,104 @@ function showToast(text){
   t.classList.add('show');
   clearTimeout(showToast._tm);
   showToast._tm = setTimeout(()=>t.classList.remove('show'),1800);
+}
+
+let rtcPeer = null;
+let webrtcAnswerTimer = null;
+let pendingIceConfig = [{urls:'stun:stun.l.google.com:19302'}];
+let iceConfigWaiter = null;
+let legacyStreamFallback = false;
+
+function waitForIceGathering(pc, timeoutMs=10000){
+  if(pc.iceGatheringState==='complete') return Promise.resolve();
+  return new Promise(resolve=>{
+    const timer=setTimeout(done,timeoutMs);
+    function done(){
+      clearTimeout(timer);
+      pc.removeEventListener('icegatheringstatechange',check);
+      resolve();
+    }
+    function check(){if(pc.iceGatheringState==='complete') done();}
+    pc.addEventListener('icegatheringstatechange',check);
+  });
+}
+
+function closeWebRTC(){
+  clearTimeout(webrtcAnswerTimer);
+  if(rtcPeer){
+    try{rtcPeer.ontrack=null;rtcPeer.close();}catch(e){}
+    rtcPeer=null;
+  }
+  const video=$('padScreenVideo');
+  if(video){
+    video.pause();
+    video.srcObject=null;
+    video.style.display='none';
+  }
+}
+
+function fallbackToLegacyStream(reason){
+  if(legacyStreamFallback) return;
+  legacyStreamFallback=true;
+  closeWebRTC();
+  showToast(reason+' — جاري استخدام وضع التوافق');
+  send({type:'stream',on:true});
+}
+
+async function startWebRTCStream(){
+  legacyStreamFallback=false;
+  closeWebRTC();
+  if(!window.RTCPeerConnection){
+    fallbackToLegacyStream('المتصفح لا يدعم WebRTC');
+    return;
+  }
+  try{
+    send({type:'ice_config'});
+    await new Promise(resolve=>{
+      const timer=setTimeout(()=>{iceConfigWaiter=null;resolve();},1200);
+      iceConfigWaiter=()=>{clearTimeout(timer);resolve();};
+    });
+    rtcPeer=new RTCPeerConnection({iceServers:pendingIceConfig});
+    rtcPeer.addTransceiver('video',{direction:'recvonly'});
+    rtcPeer.ontrack=async event=>{
+      const video=$('padScreenVideo');
+      video.srcObject=event.streams[0] || new MediaStream([event.track]);
+      video.style.display='block';
+      $('padScreenImg').style.display='none';
+      $('liveBadge').style.display='flex';
+      $('padHint').style.opacity='0';
+      try{await video.play();}catch(e){showToast('اضغط على الشاشة للسماح بتشغيل الفيديو');}
+    };
+    rtcPeer.onconnectionstatechange=()=>{
+      if(!rtcPeer) return;
+      if(rtcPeer.connectionState==='failed'){
+        fallbackToLegacyStream('فشل اتصال الفيديو المباشر');
+      }else if(rtcPeer.connectionState==='connected'){
+        clearTimeout(webrtcAnswerTimer);
+        showToast('اتصال فيديو مباشر');
+      }
+    };
+    const offer=await rtcPeer.createOffer();
+    await rtcPeer.setLocalDescription(offer);
+    await waitForIceGathering(rtcPeer);
+    send({
+      type:'webrtc_offer',
+      sdp:rtcPeer.localDescription.sdp,
+      sdp_type:rtcPeer.localDescription.type,
+      monitor:selectedMonitorIndex,
+      fps:Number($('fpsLevel').value)||30,
+      width:({low:960,medium:1280,high:1600})[$('qualityLevel').value]||1280,
+      ice_servers:pendingIceConfig
+    });
+    webrtcAnswerTimer=setTimeout(()=>{
+      if(rtcPeer && rtcPeer.connectionState!=='connected'){
+        fallbackToLegacyStream('انتهت مهلة اتصال الفيديو');
+      }
+    },18000);
+  }catch(e){
+    console.error('WebRTC start failed',e);
+    fallbackToLegacyStream('تعذر بدء الفيديو المباشر');
+  }
 }
 
 function send(obj){
@@ -1452,6 +1553,22 @@ function onMessage(ev){
   }else if(t==='audio_frame'){
     playAudioFrame(msg);
 
+  }else if(t==='webrtc_answer'){
+    if(rtcPeer){
+      clearTimeout(webrtcAnswerTimer);
+      rtcPeer.setRemoteDescription({type:msg.sdp_type||'answer',sdp:msg.sdp}).catch(e=>{
+        console.error('WebRTC answer error',e);
+        fallbackToLegacyStream('تعذر إنشاء اتصال الفيديو');
+      });
+    }
+
+  }else if(t==='webrtc_error'){
+    fallbackToLegacyStream('تعذر تشغيل WebRTC: '+(msg.error||'خطأ غير معروف'));
+
+  }else if(t==='ice_config'){
+    pendingIceConfig = msg.iceServers || [{urls:'stun:stun.l.google.com:19302'}];
+    if(iceConfigWaiter){iceConfigWaiter();iceConfigWaiter=null;}
+
   }else if(t==='frame'){
     const img = $('padScreenImg');
     img.onload = img.onerror = ()=>send({type:'frame_ack'});
@@ -1474,7 +1591,12 @@ document.getElementById('applyQuality').addEventListener('click',()=>{
   const preset=document.getElementById('qualityLevel').value;
   const cfg={low:{width:640,quality:45},medium:{width:960,quality:65},high:{width:1440,quality:82}}[preset];
   send({type:'quality',...cfg,fps:Number(document.getElementById('fpsLevel').value)});
-  showToast('تم إرسال إعدادات الجودة');
+  if(streaming && rtcPeer){
+    closeWebRTC();
+    send({type:'webrtc_stop'});
+    setTimeout(startWebRTCStream,250);
+  }
+  showToast('تم تطبيق إعدادات البث');
 });
 document.getElementById('shotBtn').addEventListener('click',()=>{send({type:'screenshot_request'});showToast('جاري التقاط الشاشة...');});
 document.getElementById('clipGetBtn').addEventListener('click',()=>send({type:'clipboard_get'}));
@@ -1485,11 +1607,13 @@ document.getElementById('clipSendBtn').addEventListener('click',async()=>{
 let screenRecorder=null,recordChunks=[];
 document.getElementById('recordBtn').addEventListener('click',()=>{
   const img=document.getElementById('padScreenImg');
+  const video=document.getElementById('padScreenVideo');
   if(screenRecorder && screenRecorder.state==='recording'){screenRecorder.stop();return;}
-  if(!img.naturalWidth){showToast('شغّل بث الشاشة أولاً');return;}
-  const canvas=document.createElement('canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;
+  const source=video && video.readyState>=2 ? video : img;
+  if(!(source.videoWidth||source.naturalWidth)){showToast('شغّل بث الشاشة أولاً');return;}
+  const canvas=document.createElement('canvas');canvas.width=source.videoWidth||source.naturalWidth;canvas.height=source.videoHeight||source.naturalHeight;
   const ctx=canvas.getContext('2d');
-  const draw=()=>{if(screenRecorder && screenRecorder.state==='recording'){ctx.drawImage(img,0,0,canvas.width,canvas.height);requestAnimationFrame(draw);}};
+  const draw=()=>{if(screenRecorder && screenRecorder.state==='recording'){ctx.drawImage(source,0,0,canvas.width,canvas.height);requestAnimationFrame(draw);}};
   const stream=canvas.captureStream(15);recordChunks=[];
   try{screenRecorder=new MediaRecorder(stream,{mimeType:MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm'});}catch(e){showToast('التسجيل غير مدعوم في هذا المتصفح');return;}
   screenRecorder.ondataavailable=e=>{if(e.data.size)recordChunks.push(e.data);};
@@ -1737,6 +1861,8 @@ if(acc){
 
 function resetScreenView(){
   stopAudio();
+  closeWebRTC();
+  send({type:'webrtc_stop'});
   streaming = false;
 
   monitorsList = [];
@@ -1747,6 +1873,8 @@ function resetScreenView(){
   const img = document.getElementById('padScreenImg');
   img.style.display = 'none';
   img.src = '';
+  const video = document.getElementById('padScreenVideo');
+  if(video){video.pause();video.srcObject=null;video.style.display='none';}
 
   document.getElementById('liveBadge').style.display = 'none';
   document.getElementById('padHint').style.opacity = '.7';
@@ -1900,13 +2028,15 @@ document.getElementById('powerClose').addEventListener('click',()=>{
 
 document.getElementById('streamToggleBtn').addEventListener('click',()=>{
   streaming = !streaming;
-
-  send({type:'stream',on:streaming});
-
   document.getElementById('streamToggleLbl').textContent =
     streaming?'إيقاف البث':'تشغيل البث';
 
-  if(!streaming){
+  if(streaming){
+    startWebRTCStream();
+  }else{
+    closeWebRTC();
+    send({type:'webrtc_stop'});
+    send({type:'stream',on:false});
     document.getElementById('padScreenImg').style.display = 'none';
     document.getElementById('liveBadge').style.display = 'none';
     document.getElementById('padHint').style.opacity = '.7';
