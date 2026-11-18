@@ -48,6 +48,7 @@ DEFAULT_RELAY = "https://remote-control-by-akira.onrender.com"
 streaming = {"on": False}
 audio_streaming = {"on": False}
 selected_monitor = {"index": 0}
+stream_settings = {"width": 800, "quality": 60, "fps": 20}
 
 flow = {
     "sent": [],
@@ -354,6 +355,31 @@ FATAL = {
 
 
 # =========================================================
+# CLIPBOARD / SCREENSHOT HELPERS
+# =========================================================
+def clipboard_set(text):
+    # Windows clipboard via Tk (built into standard Python installations).
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    root.clipboard_clear()
+    root.clipboard_append(str(text)[:20000])
+    root.update()
+    root.destroy()
+
+
+def clipboard_get():
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        value = root.clipboard_get()
+    finally:
+        root.destroy()
+    return str(value)[:20000]
+
+
+# =========================================================
 # COMMAND HANDLER
 # =========================================================
 
@@ -406,8 +432,24 @@ def handle_command(msg: dict):
         if action == "lock":
             ctypes.windll.user32.LockWorkStation()
 
+        elif action == "logout":
+            subprocess.Popen(["shutdown", "/l"], shell=False)
+
         elif action in ("sleep", "shutdown", "restart"):
             power_action(action)
+
+    elif t == "clipboard_set":
+        try:
+            clipboard_set(msg.get("text", ""))
+        except Exception as e:
+            print("[CLIPBOARD] Set failed:", e, flush=True)
+
+    elif t == "quality":
+        # Values are clamped to protect CPU and bandwidth.
+        stream_settings["width"] = max(480, min(1920, int(msg.get("width", 800))))
+        stream_settings["quality"] = max(35, min(90, int(msg.get("quality", 60))))
+        stream_settings["fps"] = max(5, min(30, int(msg.get("fps", 20))))
+        print("[SCREEN] Quality:", stream_settings, flush=True)
 
     elif t == "stream":
         streaming["on"] = bool(msg.get("on"))
@@ -433,8 +475,8 @@ async def frame_sender(ws):
     loop = asyncio.get_running_loop()
 
     failing = False
-    width = 800
-    quality = 60
+    width = stream_settings["width"]
+    quality = stream_settings["quality"]
 
     while True:
 
@@ -457,6 +499,8 @@ async def frame_sender(ws):
             flow["sent"].clear()
 
         t0 = loop.time()
+        width = stream_settings["width"]
+        quality = stream_settings["quality"]
 
         try:
             monitor_index = selected_monitor["index"]
@@ -513,7 +557,8 @@ async def frame_sender(ws):
             width = min(900, width + 40)
             quality = min(70, quality + 3)
 
-        await asyncio.sleep(max(0.01, 1 / 20 - took))
+        target_fps = stream_settings["fps"]
+        await asyncio.sleep(max(0.005, 1 / target_fps - took))
 
 
 # =========================================================
@@ -869,6 +914,25 @@ async def run(
                                 continue
 
                             t = msg.get("type")
+
+                            # CLIPBOARD REQUEST (controller only)
+                            if t == "clipboard_get":
+                                try:
+                                    await ws.send_json({"type": "clipboard_result", "text": clipboard_get()})
+                                except Exception as e:
+                                    await ws.send_json({"type": "clipboard_result", "error": str(e)[:160]})
+                                continue
+
+                            # ONE-SHOT SCREENSHOT
+                            if t == "screenshot_request":
+                                try:
+                                    data = await asyncio.to_thread(
+                                        grab_frame, 1600, 85, selected_monitor["index"]
+                                    )
+                                    await ws.send_json({"type": "screenshot_result", "data": data})
+                                except Exception as e:
+                                    await ws.send_json({"type": "screenshot_result", "error": str(e)[:160]})
+                                continue
 
                             # AUDIO
                             if t == "audio_stream":
