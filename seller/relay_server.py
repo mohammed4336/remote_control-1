@@ -1147,6 +1147,8 @@ async def forward(ws, msg):
             "monitor_selected",
             "clipboard_result",
             "screenshot_result",
+            "webrtc_answer",
+            "webrtc_error",
         )
     ):
         await safe_send(r["control"], msg)
@@ -1155,6 +1157,24 @@ async def forward(ws, msg):
 # ----------------------------------------------------------------
 # معالجات WebSocket
 # ----------------------------------------------------------------
+
+async def on_ice_config(ws, ip, msg):
+    info = ws_info.get(ws)
+    if not info or info[1] not in ("authed", "control"):
+        return await fail(ws, "ice_config", "not_logged_in")
+
+    servers = [{"urls": "stun:stun.l.google.com:19302"}]
+    turn_url = os.environ.get("TURN_URL", "").strip()
+    turn_username = os.environ.get("TURN_USERNAME", "").strip()
+    turn_credential = os.environ.get("TURN_CREDENTIAL", "").strip()
+    if turn_url and turn_username and turn_credential:
+        servers.append({
+            "urls": turn_url,
+            "username": turn_username,
+            "credential": turn_credential,
+        })
+    return await safe_send(ws, {"type": "ice_config", "iceServers": servers})
+
 
 HANDLERS = {
 
@@ -1173,6 +1193,7 @@ HANDLERS = {
     "pc_status": on_pc_status,
 
     "register_agent": on_register_agent,
+    "ice_config": on_ice_config,
 }
 
 
