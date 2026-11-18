@@ -98,3 +98,5 @@ jobs:
             dist/agent.exe
             dist/update.json
           fail_on_unmatched_files: true
+
+# Release v1.1.1: automatic Agent updater recovery and diagnostics.
