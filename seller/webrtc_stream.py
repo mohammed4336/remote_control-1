@@ -6,6 +6,8 @@ as a compatibility fallback. Frames are sent as a real-time video track rather
 than JPEG/Base64 messages through the relay.
 """
 import asyncio
+import ctypes
+from ctypes import wintypes
 import logging
 import time
 from fractions import Fraction
@@ -16,6 +18,13 @@ import os
 from av import VideoFrame
 
 log = logging.getLogger("remote-control.webrtc")
+
+# Import DXcam before legacy desktop-control/audio libraries initialize COM.
+try:
+    import dxcam as _dxcam
+except Exception as _dxcam_import_error:
+    _dxcam = None
+    log.warning("DXcam import unavailable; ImageGrab fallback will be used: %s", _dxcam_import_error)
 
 
 class DesktopVideoTrack(VideoStreamTrack):
@@ -33,8 +42,9 @@ class DesktopVideoTrack(VideoStreamTrack):
 
     def _start_camera(self):
         try:
-            import dxcam
-            self.camera = dxcam.create(
+            if _dxcam is None:
+                raise RuntimeError("DXcam is not available")
+            self.camera = _dxcam.create(
                 output_idx=self.monitor_index,
                 output_color="RGB",
             )
@@ -88,9 +98,33 @@ class DesktopVideoTrack(VideoStreamTrack):
         self._last_capture = time.monotonic()
         return np.ascontiguousarray(frame, dtype=np.uint8)
 
+    def _draw_cursor(self, frame):
+        if not self.monitor_rect:
+            return frame
+        try:
+            point = wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+            left, top, right, bottom = self.monitor_rect
+            x = point.x - left
+            y = point.y - top
+            if not (0 <= x < right - left and 0 <= y < bottom - top):
+                return frame
+            scale = frame.shape[1] / max(1, right - left)
+            x, y = int(x * scale), int(y * scale)
+            from PIL import Image, ImageDraw
+            image = Image.fromarray(frame)
+            draw = ImageDraw.Draw(image)
+            points = [(x, y), (x, y + 16), (x + 4, y + 12),
+                      (x + 8, y + 20), (x + 11, y + 18),
+                      (x + 7, y + 11), (x + 13, y + 11)]
+            draw.polygon(points, fill="white", outline="black")
+            return np.asarray(image, dtype=np.uint8)
+        except Exception:
+            return frame
+
     async def recv(self):
         # aiortc's base VideoStreamTrack is fixed at 30 FPS. Use a 90 kHz
-        # media clock here so the selected 30/60 FPS target is actually honored.
+        # media clock so the selected 30/60 FPS target is honored.
         interval = 90000 // self.fps
         if self._video_started is None:
             self._video_started = time.monotonic()
@@ -105,7 +139,8 @@ class DesktopVideoTrack(VideoStreamTrack):
         time_base = Fraction(1, 90000)
         # DXcam runs its own capture thread; only the newest frame is read.
         frame = await asyncio.to_thread(self._capture)
-        video = VideoFrame.from_ndarray(frame, format="rgb24")
+        frame = self._draw_cursor(frame)
+        video = VideoFrame.from_ndarray(np.ascontiguousarray(frame), format="rgb24")
         video.pts = pts
         video.time_base = time_base
         return video
@@ -142,6 +177,9 @@ async def answer_offer(sdp, sdp_type, monitor_index=0, fps=30, width=1280, monit
         width=width,
         monitor_rect=monitor_rect,
     )
+    # Create the DXGI capture device on the agent's main thread; DXcam owns
+    # its capture thread and exposes only the newest frame to the encoder.
+    track._start_camera()
     pc.addTrack(track)
     await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=sdp_type))
     answer = await pc.createAnswer()
