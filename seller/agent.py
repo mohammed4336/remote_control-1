@@ -22,8 +22,9 @@ import numpy as np
 
 from PIL import Image, ImageDraw, ImageGrab
 from updater import start_auto_updater
+from webrtc_stream import answer_offer, close_peer
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.1.0"
 
 
 # =========================================================
@@ -893,6 +894,8 @@ async def run(
         sender_task = None
         audio_task = None
         refresh_task = None
+        webrtc_pc = None
+        webrtc_track = None
 
         wait = 5
 
@@ -1176,6 +1179,47 @@ async def run(
                             if sender_task is None:
                                 continue
 
+                            # WEBRTC VIDEO: browser offer -> agent answer
+                            if t == "webrtc_offer":
+                                try:
+                                    if webrtc_pc is not None:
+                                        await close_peer(webrtc_pc, webrtc_track)
+                                        webrtc_pc = None
+                                        webrtc_track = None
+
+                                    monitor_index = max(0, int(msg.get("monitor", selected_monitor["index"])))
+                                    selected_monitor["index"] = monitor_index
+                                    monitors = get_monitors()
+                                    monitor_rect = None
+                                    if monitors and monitor_index < len(monitors):
+                                        m = monitors[monitor_index]
+                                        monitor_rect = (m["left"], m["top"], m["right"], m["bottom"])
+
+                                    webrtc_pc, webrtc_track, answer = await answer_offer(
+                                        msg.get("sdp", ""),
+                                        msg.get("sdp_type", "offer"),
+                                        monitor_index=monitor_index,
+                                        fps=int(msg.get("fps", 30)),
+                                        width=int(msg.get("width", 1280)),
+                                        monitor_rect=monitor_rect,
+                                    )
+                                    streaming["on"] = False
+                                    await ws.send_json({"type": "webrtc_answer", **answer})
+                                    print("[WEBRTC] Video peer negotiated", flush=True)
+                                except Exception as e:
+                                    print("[WEBRTC] Negotiation failed:", e, flush=True)
+                                    await ws.send_json({"type": "webrtc_error", "error": str(e)[:180]})
+                                continue
+
+                            if t == "webrtc_stop":
+                                streaming["on"] = False
+                                if webrtc_pc is not None:
+                                    await close_peer(webrtc_pc, webrtc_track)
+                                    webrtc_pc = None
+                                    webrtc_track = None
+                                print("[WEBRTC] Video peer stopped", flush=True)
+                                continue
+
                             # CONTROLLER STATUS
                             if t == "controller":
 
@@ -1205,6 +1249,10 @@ async def run(
 
                         streaming["on"] = False
                         audio_streaming["on"] = False
+                        if webrtc_pc is not None:
+                            await close_peer(webrtc_pc, webrtc_track)
+                            webrtc_pc = None
+                            webrtc_track = None
 
                         tasks = [
                             task
