@@ -12,7 +12,6 @@ import time
 import numpy as np
 from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer, RTCSessionDescription, VideoStreamTrack
 import os
-from aiortc.contrib.media import MediaRelay
 from av import VideoFrame
 
 log = logging.getLogger("remote-control.webrtc")
@@ -107,19 +106,22 @@ class DesktopVideoTrack(VideoStreamTrack):
         super().stop()
 
 
-async def answer_offer(sdp, sdp_type, monitor_index=0, fps=30, width=1280, monitor_rect=None):
+async def answer_offer(sdp, sdp_type, monitor_index=0, fps=30, width=1280, monitor_rect=None, ice_servers=None):
     """Create an aiortc peer and return (peer, track, answer SDP)."""
-    ice_servers = [RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
-    turn_url = os.environ.get("RC_TURN_URL", "").strip()
-    turn_user = os.environ.get("RC_TURN_USERNAME", "").strip()
-    turn_credential = os.environ.get("RC_TURN_CREDENTIAL", "").strip()
-    if turn_url and turn_user and turn_credential:
-        ice_servers.append(RTCIceServer(
-            urls=[turn_url],
-            username=turn_user,
-            credential=turn_credential,
-        ))
-    pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
+    configured = []
+    for item in (ice_servers or []):
+        if not isinstance(item, dict) or not item.get("urls"):
+            continue
+        kwargs = {"urls": item["urls"]}
+        if item.get("username"):
+            kwargs["username"] = item["username"]
+        if item.get("credential"):
+            kwargs["credential"] = item["credential"]
+        configured.append(RTCIceServer(**kwargs))
+    if not configured:
+        configured = [RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+
+    pc = RTCPeerConnection(RTCConfiguration(iceServers=configured))
     track = DesktopVideoTrack(
         monitor_index=monitor_index,
         fps=fps,
