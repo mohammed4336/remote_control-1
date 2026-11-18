@@ -1,45 +1,50 @@
-const CACHE = "remote-control-v3";
+const CACHE = "remote-control-v4";
 
-self.addEventListener("install", () => {
-  self.skipWaiting();
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
 });
 
-self.addEventListener("activate", (e) => {
-  e.waitUntil(
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    )
+      Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// كاش ديناميكي: يخزن أي صفحة/ملف يفتح بنجاح، ويرجع له لو النت انقطع
-// اتصال WebSocket ما يمر من هنا أبدًا (مو GET عادي)
-// الشبكة أول، لكن بمهلة 4 ثواني: لو السيرفر نايم/بطيء نفتح النسخة المخزّنة فورًا بدل ما تعلق الصفحة
-function fetchTimeout(req, ms) {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("timeout")), ms);
-    fetch(req).then((r) => { clearTimeout(t); resolve(r); }, (e) => { clearTimeout(t); reject(e); });
-  });
-}
+// Keep the last successfully loaded UI available on the phone.
+// The WebSocket is deliberately excluded: authentication and control always use live data.
+self.addEventListener("fetch", (event) => {
+  const request = event.request;
+  const url = new URL(request.url);
 
-self.addEventListener("fetch", (e) => {
-  const url = new URL(e.request.url);
-  if (e.request.method !== "GET" || url.origin !== location.origin) return;
-  if (url.pathname.startsWith("/download") || url.pathname.startsWith("/seller") ||
-      url.pathname.startsWith("/admin") || url.pathname === "/ws") return;
+  if (request.method !== "GET" || url.origin !== self.location.origin) return;
+  if (
+    url.pathname.startsWith("/download") ||
+    url.pathname.startsWith("/seller") ||
+    url.pathname.startsWith("/admin") ||
+    url.pathname === "/ws" ||
+    url.pathname === "/health"
+  ) return;
 
-  e.respondWith(
-    caches.open(CACHE).then(async (cache) => {
-      try {
-        const fresh = await fetchTimeout(e.request, 4000);
-        if (fresh && fresh.ok) cache.put(e.request, fresh.clone());
-        return fresh;
-      } catch (err) {
-        const cached = await cache.match(e.request);
-        if (cached) return cached;
-        return fetch(e.request);   // ما في نسخة مخزّنة: ننتظر السيرفر
+  const cachePromise = caches.open(CACHE);
+  const networkPromise = cachePromise.then((cache) =>
+    fetch(request).then((response) => {
+      if (response && response.ok) {
+        cache.put(request, response.clone()).catch(() => {});
       }
+      return response;
+    })
+  );
+
+  // Refresh the cached copy in the background without delaying the page.
+  event.waitUntil(networkPromise.then(() => undefined).catch(() => undefined));
+
+  event.respondWith(
+    cachePromise.then(async (cache) => {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+      return networkPromise;
     })
   );
 });
