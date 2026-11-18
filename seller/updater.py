@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Verified self-updater for the Windows Remote Control Agent."""
+"""Verified, logged self-updater for the Windows Remote Control Agent."""
 import hashlib
 import json
 import os
@@ -15,6 +15,16 @@ REPO = "remote_control-1"
 API_LATEST = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"
 CHECK_INTERVAL = 6 * 60 * 60
 MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
+
+
+def _log(message):
+    try:
+        path = os.path.join(tempfile.gettempdir(), "remote-control-agent-updater.log")
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(path, "a", encoding="utf-8") as stream:
+            stream.write(f"[{stamp}] {message}\n")
+    except Exception:
+        pass
 
 
 def _request(url, timeout=30):
@@ -46,7 +56,7 @@ def _download(url, destination, expected_sha256):
     digest = hashlib.sha256()
     total = 0
     try:
-        with _request(url, timeout=90) as response, open(destination, "wb") as out:
+        with _request(url, timeout=120) as response, open(destination, "wb") as out:
             while True:
                 chunk = response.read(1024 * 1024)
                 if not chunk:
@@ -56,8 +66,10 @@ def _download(url, destination, expected_sha256):
                     raise RuntimeError("Update file exceeds size limit")
                 digest.update(chunk)
                 out.write(chunk)
-        if digest.hexdigest().lower() != str(expected_sha256).lower():
+        actual = digest.hexdigest().lower()
+        if actual != str(expected_sha256).lower():
             raise RuntimeError("Update SHA-256 verification failed")
+        _log(f"Downloaded and verified update ({total} bytes, SHA256 {actual}).")
         return total
     except Exception:
         try:
@@ -67,81 +79,110 @@ def _download(url, destination, expected_sha256):
         raise
 
 
-def _start_replacement_helper(target, staged):
-    # Copy to a temporary file beside the installed EXE so the final rename
-    # stays on the same volume. Keep one previous EXE as a recovery copy.
+def _start_replacement_helper(target, staged, version):
+    log_path = os.path.join(tempfile.gettempdir(), "remote-control-agent-updater.log")
+    failed_marker = target + ".update-failed"
     ps = r"""
 $ErrorActionPreference = 'Stop'
 $target = __TARGET__
 $staged = __STAGED__
 $parent = __PARENT__
+$version = __VERSION__
+$log = __LOG__
+$failedMarker = __FAILED__
 $directory = [System.IO.Path]::GetDirectoryName($target)
 $name = [System.IO.Path]::GetFileName($target)
 $candidate = Join-Path $directory ($name + '.update')
 $backup = $target + '.previous'
 
-while (Get-Process -Id $parent -ErrorAction SilentlyContinue) {
-    Start-Sleep -Milliseconds 300
+function Write-Log([string]$message) {
+    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -LiteralPath $log -Value "[$stamp] [HELPER] $message" -Encoding UTF8
 }
 
 try {
+    Write-Log "Helper started for version $version. Target: $target"
+    $deadline = (Get-Date).AddSeconds(120)
+    while (Get-Process -Id $parent -ErrorAction SilentlyContinue) {
+        if ((Get-Date) -gt $deadline) { throw 'Parent Agent did not exit within 120 seconds.' }
+        Start-Sleep -Milliseconds 300
+    }
+
+    if (-not (Test-Path -LiteralPath $staged)) { throw 'Staged update file is missing.' }
     Copy-Item -LiteralPath $staged -Destination $candidate -Force
-    if (-not (Test-Path -LiteralPath $candidate)) {
-        throw 'Staged update could not be copied beside the Agent.'
+    if (-not (Test-Path -LiteralPath $candidate)) { throw 'Candidate copy failed.' }
+
+    $candidateHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash
+    $stagedHash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash
+    if ($candidateHash -ne $stagedHash) { throw 'Candidate SHA256 does not match staged file.' }
+
+    if (Test-Path -LiteralPath $target) {
+        Copy-Item -LiteralPath $target -Destination $backup -Force
+        Write-Log "Backup created: $backup"
     }
 
-    # Preserve the currently working executable before replacing it.
-    Copy-Item -LiteralPath $target -Destination $backup -Force
     Move-Item -LiteralPath $candidate -Destination $target -Force
+    if (-not (Test-Path -LiteralPath $target)) { throw 'New executable is missing after replacement.' }
+    Write-Log 'New executable installed. Starting it now.'
 
-    if (-not (Test-Path -LiteralPath $target)) {
-        throw 'New executable is missing after replacement.'
-    }
-
-    $newProcess = Start-Process -FilePath $target -PassThru
-    Start-Sleep -Seconds 4
-    $newProcess.Refresh()
-
-    if ($newProcess.HasExited) {
-        throw 'Updated Agent exited immediately; rolling back.'
-    }
+    $newProcess = Start-Process -FilePath $target -WorkingDirectory $directory -PassThru
+    $healthDeadline = (Get-Date).AddSeconds(25)
+    do {
+        Start-Sleep -Seconds 1
+        $newProcess.Refresh()
+        if ($newProcess.HasExited) {
+            throw "Updated Agent exited during startup (exit code $($newProcess.ExitCode))."
+        }
+    } while ((Get-Date) -lt $healthDeadline)
 
     Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
-    # Keep .previous until the next successful update. It is the recovery copy.
+    Remove-Item -LiteralPath $failedMarker -Force -ErrorAction SilentlyContinue
+    Write-Log "Version $version remained running for 25 seconds. Update succeeded."
 }
 catch {
-    Write-Output ('Update failed: ' + $_.Exception.Message)
+    $message = $_.Exception.Message
+    Write-Log "UPDATE FAILED: $message"
+    try { Set-Content -LiteralPath $failedMarker -Value $version -Encoding ASCII } catch {}
     Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
 
     if (Test-Path -LiteralPath $backup) {
         try {
             Copy-Item -LiteralPath $backup -Destination $target -Force
+            Write-Log 'Previous executable restored.'
         } catch {
-            Write-Output ('Rollback copy failed: ' + $_.Exception.Message)
+            Write-Log "Rollback failed: $($_.Exception.Message)"
         }
     }
 
     if (Test-Path -LiteralPath $target) {
-        Start-Process -FilePath $target
+        try {
+            Start-Process -FilePath $target -WorkingDirectory $directory
+            Write-Log 'Restored executable launched.'
+        } catch {
+            Write-Log "Could not relaunch restored executable: $($_.Exception.Message)"
+        }
     }
 }
-""".replace("__TARGET__", _ps_quote(target))
-    ps = ps.replace("__STAGED__", _ps_quote(staged))
-    ps = ps.replace("__PARENT__", str(os.getpid()))
+"""
+    replacements = {
+        "__TARGET__": _ps_quote(target),
+        "__STAGED__": _ps_quote(staged),
+        "__PARENT__": str(os.getpid()),
+        "__VERSION__": _ps_quote(version),
+        "__LOG__": _ps_quote(log_path),
+        "__FAILED__": _ps_quote(failed_marker),
+    }
+    for key, value in replacements.items():
+        ps = ps.replace(key, value)
 
     flags = (
         getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
     )
-    subprocess.Popen(
+    process = subprocess.Popen(
         [
-            "powershell.exe",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            ps,
+            "powershell.exe", "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass", "-Command", ps,
         ],
         creationflags=flags,
         close_fds=True,
@@ -149,6 +190,7 @@ catch {
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    _log(f"Replacement helper launched (PID {process.pid}) for {version}.")
 
 
 def check_and_stage(current_version):
@@ -166,6 +208,17 @@ def check_and_stage(current_version):
     remote = _version_tuple(latest)
     if not current or not remote or remote <= current:
         return False
+
+    target = os.path.abspath(sys.executable)
+    failed_marker = target + ".update-failed"
+    try:
+        with open(failed_marker, "r", encoding="ascii") as stream:
+            failed_version = stream.read().strip()
+        if failed_version == latest:
+            _log(f"Skipping version {latest}; a previous attempt failed. Install it manually or remove the marker after diagnosis.")
+            return False
+    except OSError:
+        pass
 
     assets = {
         asset.get("name"): asset
@@ -187,17 +240,13 @@ def check_and_stage(current_version):
     if len(expected) != 64 or any(char not in "0123456789abcdef" for char in expected):
         raise RuntimeError("Release metadata has an invalid SHA-256")
 
-    target = os.path.abspath(sys.executable)
-    staged = os.path.join(
-        tempfile.gettempdir(),
-        f"remote-control-agent-{latest}.exe",
-    )
-
+    staged = os.path.join(tempfile.gettempdir(), f"remote-control-agent-{latest}.exe")
+    _log(f"New release {latest} found; downloading.")
     print(f"[UPDATE] Downloading version {latest}...", flush=True)
     _download(agent_asset["browser_download_url"], staged, expected)
 
     try:
-        _start_replacement_helper(target, staged)
+        _start_replacement_helper(target, staged, latest)
     except Exception:
         try:
             os.remove(staged)
@@ -206,6 +255,7 @@ def check_and_stage(current_version):
         raise
 
     print("[UPDATE] Verified update staged; restarting...", flush=True)
+    _log(f"Update {latest} staged; exiting parent process for replacement.")
     return True
 
 
@@ -219,6 +269,7 @@ def start_auto_updater(current_version):
                 if check_and_stage(current_version):
                     os._exit(0)
             except Exception as exc:
+                _log(f"Update check failed: {exc}")
                 print(f"[UPDATE] Check failed (will retry): {exc}", flush=True)
             time.sleep(CHECK_INTERVAL)
 
