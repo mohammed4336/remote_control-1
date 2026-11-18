@@ -96,14 +96,14 @@ class DesktopVideoTrack(VideoStreamTrack):
         video.time_base = time_base
         return video
 
-    async def stop(self):
+    def stop(self):
         try:
             if self.camera is not None:
                 self.camera.stop()
         except Exception:
             pass
         self.camera = None
-        await super().stop()
+        super().stop()
 
 
 async def answer_offer(sdp, sdp_type, monitor_index=0, fps=30, width=1280, monitor_rect=None):
@@ -127,7 +127,7 @@ async def answer_offer(sdp, sdp_type, monitor_index=0, fps=30, width=1280, monit
 async def close_peer(pc, track=None):
     if track is not None:
         try:
-            await track.stop()
+            track.stop()
         except Exception:
             pass
     if pc is not None:
