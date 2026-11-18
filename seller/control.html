@@ -391,7 +391,9 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
 }
 /* أزرار التحكم مخفية افتراضياً في ملء الشاشة */
 #controlScreen.expanded-view .click-row,
-#controlScreen.expanded-view .dock{
+#controlScreen.expanded-view .dock,
+#controlScreen.expanded-view #extraTools,
+#controlScreen.expanded-view #qualityPanel{
   opacity:0;
   visibility:hidden;
   pointer-events:none;
@@ -399,7 +401,9 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
   transition:opacity .2s ease, transform .2s ease, visibility .2s ease;
 }
 #controlScreen.expanded-view.controls-visible .click-row,
-#controlScreen.expanded-view.controls-visible .dock{
+#controlScreen.expanded-view.controls-visible .dock,
+#controlScreen.expanded-view.controls-visible #extraTools,
+#controlScreen.expanded-view.controls-visible #qualityPanel{
   opacity:1;
   visibility:visible;
   pointer-events:auto;
@@ -732,6 +736,20 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
 
     <button class="icon-btn fullscreen-btn" id="fullscreenBtn" type="button" aria-label="ملء الشاشة" title="ملء الشاشة">⛶</button>
     <button class="icon-btn" id="disconnectBtn" title="قطع الاتصال">⏻</button>
+  </div>
+
+  <div id="extraTools" class="glass" style="display:flex;gap:7px;flex-wrap:wrap;padding:8px;border-radius:14px;align-items:center">
+    <button class="icon-btn" id="qualityBtn" type="button" title="جودة البث">⚙️ الجودة</button>
+    <button class="icon-btn" id="shotBtn" type="button" title="تصوير الشاشة">📸 لقطة</button>
+    <button class="icon-btn" id="clipGetBtn" type="button" title="نسخ من الكمبيوتر">📋 نسخ الكمبيوتر</button>
+    <button class="icon-btn" id="clipSendBtn" type="button" title="إرسال نص للحافظة">📤 إرسال الحافظة</button>
+    <button class="icon-btn" id="recordBtn" type="button" title="تسجيل بث الشاشة">⏺ تسجيل</button>
+    <span id="netStats" style="font-size:11px;color:var(--muted);margin-inline-start:auto">الاتصال: —</span>
+  </div>
+  <div id="qualityPanel" class="glass" style="display:none;padding:10px;border-radius:13px;gap:8px;align-items:center;flex-wrap:wrap">
+    <label style="font-size:12px">الجودة <select id="qualityLevel"><option value="low">اقتصادي</option><option value="medium" selected>متوازن</option><option value="high">عالٍ</option></select></label>
+    <label style="font-size:12px">FPS <select id="fpsLevel"><option>10</option><option selected>20</option><option>30</option></select></label>
+    <button class="icon-btn" id="applyQuality" type="button">تطبيق</button>
   </div>
 
   <div id="touchpad">
@@ -1386,6 +1404,15 @@ function onMessage(ev){
     showToast('انتهى الحساب أو تم إيقافه');
     if(!authed) backToLogin('انتهى الحساب أو تم إيقافه');
 
+  }else if(t==='clipboard_result'){
+    if(msg.error){showToast('تعذر قراءة حافظة الكمبيوتر');}
+    else if(navigator.clipboard && window.isSecureContext){navigator.clipboard.writeText(msg.text||'').then(()=>showToast('تم نسخ نص الكمبيوتر')).catch(()=>showToast('تعذر نسخ النص'));}
+    else {showToast('نص الحافظة: '+String(msg.text||'').slice(0,90));}
+
+  }else if(t==='screenshot_result'){
+    if(msg.error){showToast('فشل التقاط الشاشة');}
+    else {const a=document.createElement('a');a.href='data:image/jpeg;base64,'+msg.data;a.download='remote-screen-'+Date.now()+'.jpg';a.click();showToast('تم حفظ لقطة الشاشة');}
+
   }else if(t==='audio_frame'){
     playAudioFrame(msg);
 
@@ -1401,6 +1428,38 @@ function onMessage(ev){
     }
   }
 }
+
+// أدوات إضافية: جودة البث، اللقطة، الحافظة، وتسجيل البث.
+const qualityBtn = document.getElementById('qualityBtn');
+qualityBtn.addEventListener('click',()=>{
+  const p=document.getElementById('qualityPanel'); p.style.display=p.style.display==='flex'?'none':'flex';
+});
+document.getElementById('applyQuality').addEventListener('click',()=>{
+  const preset=document.getElementById('qualityLevel').value;
+  const cfg={low:{width:640,quality:45},medium:{width:960,quality:65},high:{width:1440,quality:82}}[preset];
+  send({type:'quality',...cfg,fps:Number(document.getElementById('fpsLevel').value)});
+  showToast('تم إرسال إعدادات الجودة');
+});
+document.getElementById('shotBtn').addEventListener('click',()=>{send({type:'screenshot_request'});showToast('جاري التقاط الشاشة...');});
+document.getElementById('clipGetBtn').addEventListener('click',()=>send({type:'clipboard_get'}));
+document.getElementById('clipSendBtn').addEventListener('click',async()=>{
+  try{const text=await navigator.clipboard.readText();if(!text){showToast('الحافظة فارغة');return;}send({type:'clipboard_set',text});showToast('تم إرسال النص للكمبيوتر');}
+  catch(e){showToast('اسمح للمتصفح بالوصول إلى الحافظة');}
+});
+let screenRecorder=null,recordChunks=[];
+document.getElementById('recordBtn').addEventListener('click',()=>{
+  const img=document.getElementById('padScreenImg');
+  if(screenRecorder && screenRecorder.state==='recording'){screenRecorder.stop();return;}
+  if(!img.naturalWidth){showToast('شغّل بث الشاشة أولاً');return;}
+  const canvas=document.createElement('canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;
+  const ctx=canvas.getContext('2d');
+  const draw=()=>{if(screenRecorder && screenRecorder.state==='recording'){ctx.drawImage(img,0,0,canvas.width,canvas.height);requestAnimationFrame(draw);}};
+  const stream=canvas.captureStream(15);recordChunks=[];
+  try{screenRecorder=new MediaRecorder(stream,{mimeType:MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm'});}catch(e){showToast('التسجيل غير مدعوم في هذا المتصفح');return;}
+  screenRecorder.ondataavailable=e=>{if(e.data.size)recordChunks.push(e.data);};
+  screenRecorder.onstop=()=>{const blob=new Blob(recordChunks,{type:'video/webm'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='remote-session-'+Date.now()+'.webm';a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);document.getElementById('recordBtn').textContent='⏺ تسجيل';};
+  screenRecorder.start(500);draw();document.getElementById('recordBtn').textContent='⏹ إيقاف التسجيل';
+});
 
 function openWs(timeoutMs){
   return new Promise((resolve,reject)=>{
