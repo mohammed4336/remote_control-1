@@ -21,6 +21,9 @@ import soundcard as sc
 import numpy as np
 
 from PIL import Image, ImageDraw, ImageGrab
+from updater import start_auto_updater
+
+APP_VERSION = "1.0.1"
 
 
 # =========================================================
@@ -1228,6 +1231,7 @@ async def run(
 
 def main():
 
+    start_auto_updater(APP_VERSION)
     cfg = load_config()
 
     relay = (
