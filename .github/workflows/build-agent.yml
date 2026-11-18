@@ -36,7 +36,7 @@ jobs:
           RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           python -m compileall -q seller
-          python -c "import aiohttp, pyautogui, soundcard, numpy; from PIL import Image, ImageDraw, ImageGrab; import updater; print('ALL DEPENDENCIES AND UPDATER OK')"
+          python -c "import sys; sys.path.insert(0, 'seller'); import aiohttp, pyautogui, soundcard, numpy; from PIL import Image, ImageDraw, ImageGrab; import updater; print('ALL DEPENDENCIES AND UPDATER OK')"
           $agent = Get-Content -Raw "seller/agent.py"
           $match = [regex]::Match($agent, 'APP_VERSION\s*=\s*["'']([^"'']+)["'']')
           if (-not $match.Success) { throw "APP_VERSION was not found in seller/agent.py" }
