@@ -562,12 +562,16 @@ async def frame_sender(ws):
                 35, stream_settings["quality"] - 4
             )
 
-        elif took < 0.12 and rtt < 0.3:
+        elif (
+            took < 0.12
+            and rtt < 0.3
+            and stream_settings["width"] < 900
+        ):
             stream_settings["width"] = min(
-                1920, stream_settings["width"] + 20
+                900, stream_settings["width"] + 40
             )
             stream_settings["quality"] = min(
-                90, stream_settings["quality"] + 1
+                70, stream_settings["quality"] + 3
             )
 
         target_fps = stream_settings["fps"]
