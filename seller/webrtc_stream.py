@@ -17,6 +17,13 @@ from av import VideoFrame
 
 log = logging.getLogger("remote-control.webrtc")
 
+# Import DXcam before legacy desktop-control/audio libraries initialize COM.
+try:
+    import dxcam as _dxcam
+except Exception as _dxcam_import_error:
+    _dxcam = None
+    log.warning("DXcam import unavailable; ImageGrab fallback will be used: %s", _dxcam_import_error)
+
 
 class DesktopVideoTrack(VideoStreamTrack):
     def __init__(self, monitor_index=0, fps=30, width=1280, monitor_rect=None):
@@ -33,8 +40,9 @@ class DesktopVideoTrack(VideoStreamTrack):
 
     def _start_camera(self):
         try:
-            import dxcam
-            self.camera = dxcam.create(
+            if _dxcam is None:
+                raise RuntimeError("DXcam is not available")
+            self.camera = _dxcam.create(
                 output_idx=self.monitor_index,
                 output_color="RGB",
             )
@@ -142,6 +150,9 @@ async def answer_offer(sdp, sdp_type, monitor_index=0, fps=30, width=1280, monit
         width=width,
         monitor_rect=monitor_rect,
     )
+    # Create the DXGI capture device on the agent's main thread; DXcam owns
+    # its capture thread and exposes only the newest frame to the encoder.
+    track._start_camera()
     pc.addTrack(track)
     await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=sdp_type))
     answer = await pc.createAnswer()
