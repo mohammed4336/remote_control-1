@@ -15,6 +15,8 @@ import sys
 import subprocess
 from ctypes import wintypes
 
+from webrtc_stream import answer_offer, close_peer
+
 import aiohttp
 import pyautogui
 import soundcard as sc
@@ -22,7 +24,6 @@ import numpy as np
 
 from PIL import Image, ImageDraw, ImageGrab
 from updater import start_auto_updater
-from webrtc_stream import answer_offer, close_peer
 
 APP_VERSION = "1.1.0"
 
