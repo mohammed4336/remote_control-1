@@ -1111,6 +1111,7 @@ function fallbackToLegacyStream(reason){
   if(legacyStreamFallback) return;
   legacyStreamFallback=true;
   closeWebRTC();
+  send({type:'webrtc_stop'});
   showToast(reason+' — جاري استخدام وضع التوافق');
   send({type:'stream',on:true});
 }
