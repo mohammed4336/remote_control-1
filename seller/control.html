@@ -1078,6 +1078,73 @@ let webrtcAnswerTimer = null;
 let pendingIceConfig = [{urls:'stun:stun.l.google.com:19302'}];
 let iceConfigWaiter = null;
 let legacyStreamFallback = false;
+let rtcStatsTimer = null;
+let rtcStatsPrevious = null;
+
+function resetNetworkStats(message='الاتصال: —'){
+  clearInterval(rtcStatsTimer);
+  rtcStatsTimer = null;
+  rtcStatsPrevious = null;
+  const el = $('netStats');
+  if(el) el.textContent = message;
+}
+
+function startWebRTCStats(pc){
+  resetNetworkStats('قياس سرعة الاتصال...');
+  let busy = false;
+  rtcStatsTimer = setInterval(async()=>{
+    if(busy || !pc || pc !== rtcPeer || pc.connectionState !== 'connected') return;
+    busy = true;
+    try{
+      const report = await pc.getStats();
+      let inbound = null;
+      let candidate = null;
+      report.forEach(stat=>{
+        if(stat.type === 'inbound-rtp' && (stat.kind === 'video' || stat.mediaType === 'video')){
+          inbound = stat;
+        }
+        if(stat.type === 'candidate-pair' && (
+          stat.selected === true ||
+          (stat.nominated === true && stat.state === 'succeeded')
+        )){
+          candidate = stat;
+        }
+      });
+
+      let speed = '—';
+      let fps = '—';
+      if(inbound){
+        const now = Number(inbound.timestamp) || Date.now();
+        const bytes = Number(inbound.bytesReceived) || 0;
+        if(rtcStatsPrevious && now > rtcStatsPrevious.time && bytes >= rtcStatsPrevious.bytes){
+          const seconds = (now - rtcStatsPrevious.time) / 1000;
+          const mbps = ((bytes - rtcStatsPrevious.bytes) * 8 / seconds) / 1000000;
+          speed = mbps >= 1 ? mbps.toFixed(1)+' Mbps' : (mbps * 1000).toFixed(0)+' Kbps';
+        }
+        rtcStatsPrevious = {time:now,bytes};
+        if(Number.isFinite(Number(inbound.framesPerSecond))){
+          fps = Math.round(Number(inbound.framesPerSecond));
+        }
+      }
+
+      let ping = '—';
+      if(candidate && Number.isFinite(Number(candidate.currentRoundTripTime))){
+        ping = Math.round(Number(candidate.currentRoundTripTime) * 1000)+' ms';
+      }
+
+      const el = $('netStats');
+      if(el){
+        el.textContent = '↓ '+speed+'  ·  '+fps+' FPS  ·  Ping '+ping;
+        el.title = 'سرعة استقبال بث الشاشة من الكمبيوتر';
+      }
+    }catch(err){
+      const el = $('netStats');
+      if(el) el.textContent = 'تعذر قياس الاتصال';
+    }finally{
+      busy = false;
+    }
+  },1000);
+}
 
 function waitForIceGathering(pc, timeoutMs=10000){
   if(pc.iceGatheringState==='complete') return Promise.resolve();
@@ -1094,6 +1161,7 @@ function waitForIceGathering(pc, timeoutMs=10000){
 }
 
 function closeWebRTC(){
+  resetNetworkStats('الاتصال: —');
   clearTimeout(webrtcAnswerTimer);
   if(rtcPeer){
     try{rtcPeer.ontrack=null;rtcPeer.close();}catch(e){}
@@ -1146,6 +1214,7 @@ async function startWebRTCStream(){
         fallbackToLegacyStream('فشل اتصال الفيديو المباشر');
       }else if(rtcPeer.connectionState==='connected'){
         clearTimeout(webrtcAnswerTimer);
+        startWebRTCStats(rtcPeer);
         showToast('اتصال فيديو مباشر');
       }
     };
