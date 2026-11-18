@@ -45,6 +45,7 @@ jobs:
           if (-not $match.Success) { throw "APP_VERSION was not found in seller/agent.py" }
           if ($match.Groups[1].Value -ne $env:RELEASE_VERSION) { throw "Workflow version $env:RELEASE_VERSION does not match APP_VERSION $($match.Groups[1].Value)" }
       - name: Ensure release tag does not already exist
+        if: ${{ github.event_name != 'pull_request' }}
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
