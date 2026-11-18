@@ -1,5 +1,8 @@
 name: Build and Publish Agent
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version:
@@ -10,7 +13,10 @@ permissions:
   contents: write
 jobs:
   build:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release]') }}
     runs-on: windows-latest
+    env:
+      RELEASE_VERSION: ${{ inputs.version || '1.0.1' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,7 +33,7 @@ jobs:
       - name: Verify source syntax, dependencies and release version
         shell: pwsh
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           python -m compileall -q seller
           python -c "import aiohttp, pyautogui, soundcard, numpy; from PIL import Image, ImageDraw, ImageGrab; import updater; print('ALL DEPENDENCIES AND UPDATER OK')"
@@ -38,17 +44,21 @@ jobs:
       - name: Ensure release tag does not already exist
         shell: pwsh
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "v$env:RELEASE_VERSION"
           $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag"
+          $exists = $false
           try {
             Invoke-RestMethod -Uri $uri -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; "X-GitHub-Api-Version" = "2022-11-28" } | Out-Null
-            throw "Release tag $tag already exists. Choose a new version."
+            $exists = $true
           } catch {
-            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
+            $status = 0
+            if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+            if ($status -ne 404) { throw }
           }
+          if ($exists) { throw "Release tag $tag already exists. Choose a new version." }
       - name: Build EXE
         shell: pwsh
         run: |
@@ -56,7 +66,7 @@ jobs:
       - name: Verify EXE and create update manifest
         shell: pwsh
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           if (-not (Test-Path "dist/agent.exe")) { throw "Build failed: dist/agent.exe was not created" }
           $hash = (Get-FileHash "dist/agent.exe" -Algorithm SHA256).Hash.ToLower()
@@ -67,17 +77,18 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: agent-${{ inputs.version }}
+          name: agent-${{ env.RELEASE_VERSION }}
           path: |
             dist/agent.exe
             dist/update.json
           if-no-files-found: error
       - name: Publish GitHub Release
+        if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release]') }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ inputs.version }}
+          tag_name: v${{ env.RELEASE_VERSION }}
           target_commitish: ${{ github.sha }}
-          name: Remote Control Agent v${{ inputs.version }}
+          name: Remote Control Agent v${{ env.RELEASE_VERSION }}
           generate_release_notes: true
           files: |
             dist/agent.exe
