@@ -1151,7 +1151,8 @@ async function startWebRTCStream(){
       sdp_type:rtcPeer.localDescription.type,
       monitor:selectedMonitorIndex,
       fps:Number($('fpsLevel').value)||30,
-      width:({low:960,medium:1280,high:1600})[$('qualityLevel').value]||1280
+      width:({low:960,medium:1280,high:1600})[$('qualityLevel').value]||1280,
+      ice_servers:pendingIceConfig
     });
     webrtcAnswerTimer=setTimeout(()=>{
       if(rtcPeer && rtcPeer.connectionState!=='connected'){
@@ -1590,7 +1591,12 @@ document.getElementById('applyQuality').addEventListener('click',()=>{
   const preset=document.getElementById('qualityLevel').value;
   const cfg={low:{width:640,quality:45},medium:{width:960,quality:65},high:{width:1440,quality:82}}[preset];
   send({type:'quality',...cfg,fps:Number(document.getElementById('fpsLevel').value)});
-  showToast('تم إرسال إعدادات الجودة');
+  if(streaming && rtcPeer){
+    closeWebRTC();
+    send({type:'webrtc_stop'});
+    setTimeout(startWebRTCStream,250);
+  }
+  showToast('تم تطبيق إعدادات البث');
 });
 document.getElementById('shotBtn').addEventListener('click',()=>{send({type:'screenshot_request'});showToast('جاري التقاط الشاشة...');});
 document.getElementById('clipGetBtn').addEventListener('click',()=>send({type:'clipboard_get'}));
