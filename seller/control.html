@@ -953,8 +953,14 @@ monitorSelect.addEventListener('change',()=>{
 
   const img = $('padScreenImg');
   img.style.display = 'none';
+  $('padScreenVideo').style.display = 'none';
   $('liveBadge').style.display = 'none';
   $('padHint').style.opacity = '.7';
+  if(streaming && rtcPeer){
+    closeWebRTC();
+    send({type:'webrtc_stop'});
+    setTimeout(startWebRTCStream,250);
+  }
 });
 
 if('serviceWorker' in navigator){
