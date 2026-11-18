@@ -67,12 +67,14 @@ jobs:
         shell: pwsh
         run: |
           python -m PyInstaller --clean --noconfirm --onefile --console --name agent --paths seller --collect-all aiohttp --collect-all pyautogui --collect-all PIL --collect-all soundcard --collect-all numpy --collect-all aiortc --collect-all av --collect-all dxcam --hidden-import=soundcard.mediafoundation --hidden-import=updater seller/agent.py
+          python -m PyInstaller --clean --noconfirm --onefile --console --name wake-bridge --paths seller seller/wake_bridge.py
       - name: Verify EXE and create update manifest
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           if (-not (Test-Path "dist/agent.exe")) { throw "Build failed: dist/agent.exe was not created" }
+          if (-not (Test-Path "dist/wake-bridge.exe")) { throw "Build failed: dist/wake-bridge.exe was not created" }
           $hash = (Get-FileHash "dist/agent.exe" -Algorithm SHA256).Hash.ToLower()
           $manifest = @{ version = $env:RELEASE_VERSION; filename = "agent.exe"; sha256 = $hash } | ConvertTo-Json -Compress
           Set-Content -Path "dist/update.json" -Value $manifest -NoNewline -Encoding utf8
@@ -84,6 +86,7 @@ jobs:
           name: agent-${{ env.RELEASE_VERSION }}
           path: |
             dist/agent.exe
+            dist/wake-bridge.exe
             dist/update.json
           if-no-files-found: error
       - name: Publish GitHub Release
