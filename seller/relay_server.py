@@ -1310,7 +1310,7 @@ async def health(request):
 async def download_agent(request):
     download_url = (
         "https://github.com/mohammed4336/remote_control-1/"
-        "releases/download/v1.0.0/agent.exe"
+        "releases/latest/download/agent.exe"
     )
 
     raise web.HTTPFound(
