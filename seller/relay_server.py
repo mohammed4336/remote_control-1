@@ -1136,14 +1136,18 @@ async def forward(ws, msg):
         await safe_send(r["agent"], msg)
 
     # رسائل الكمبيوتر ترجع إلى الجوال
-    elif (
-        role == "agent"
-        and r.get("control")
-        and msg.get("type") in (
-            "frame",
-            "audio_frame",
-            "monitors",
-            "monitor_selected",
+elif (
+    role == "agent"
+    and r.get("control")
+    and msg.get("type") in (
+        "frame",
+        "audio_frame",
+        "monitors",
+        "monitor_selected",
+        "clipboard_result",
+        "screenshot_result",
+    )
+):
         )
     ):
         await safe_send(r["control"], msg)
