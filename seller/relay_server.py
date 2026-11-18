@@ -408,6 +408,7 @@ async def start_session(ws, row, new_token=None):
         username=row["username"],
         pc={
             "online": bool(r.get("agent")),
+            "wake_bridge": bool(r.get("wake_bridge") and not r["wake_bridge"].closed),
             "name": row.get("agent_name") or ""
         },
         **extra
@@ -713,6 +714,7 @@ async def on_pc_status(ws, ip, msg):
             ws,
             "pc_status",
             online=bool(r.get("agent")),
+            wake_bridge=bool(r.get("wake_bridge") and not r["wake_bridge"].closed),
             name=row.get("agent_name") or ""
         )
 
@@ -951,6 +953,29 @@ async def on_pair_confirm(ws, ip, msg):
 # تسجيل الـ Agent
 # ----------------------------------------------------------------
 
+async def on_register_wake_bridge(ws, ip, msg):
+    if over("wake_bridge", ip, 8, 600):
+        return await fail(ws, "wake_bridge_registered", "rate_limited")
+    username = ldb.normalize_username(msg.get("username")) or ""
+    row = ldb.get_by_username(username)
+    code = row and row["code"]
+    if not row or not ldb.check_password(row, msg.get("password", "")):
+        record("wake_bridge", ip)
+        return await fail(ws, "wake_bridge_registered", "bad_credentials")
+    ok, reason = ldb.usable(row)
+    if not ok or not row.get("phone_token_hash"):
+        return await fail(ws, "wake_bridge_registered", reason or "phone_not_bound")
+    r = rooms.setdefault(code, {"agent": None, "control": None, "pending": None, "wake_bridge": None})
+    old = r.get("wake_bridge")
+    if old and old is not ws:
+        await safe_close(old)
+    r["wake_bridge"] = ws
+    ws_info[ws] = (code, "wake_bridge")
+    await reply(ws, "wake_bridge_registered", ok=True)
+    if r.get("control"):
+        await safe_send(r["control"], {"type": "wake_bridge_online"})
+
+
 async def on_register_agent(ws, ip, msg):
     hwid = str(msg.get("hwid", ""))[:200]
     name = str(msg.get("name", ""))[:60]
@@ -1114,6 +1139,11 @@ async def cleanup(ws):
     elif role == "authed" and r.get("pending") is ws:
         r["pending"] = None
 
+    elif role == "wake_bridge" and r.get("wake_bridge") is ws:
+        r["wake_bridge"] = None
+        if r.get("control"):
+            await safe_send(r["control"], {"type": "wake_bridge_offline"})
+
 
 # ----------------------------------------------------------------
 # تمرير الرسائل بين الجوال والكمبيوتر
@@ -1130,6 +1160,28 @@ async def forward(ws, msg):
     r = rooms.get(code)
 
     if not r:
+        return
+
+    if role == "control" and msg.get("type") == "wake_pc":
+        mac = str(msg.get("mac", "")).strip().lower()
+        broadcast = str(msg.get("broadcast", "255.255.255.255")).strip()
+        if not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
+            return await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "invalid_mac"})
+        try:
+            import ipaddress
+            ipaddress.IPv4Address(broadcast)
+        except Exception:
+            return await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "invalid_broadcast"})
+        bridge = r.get("wake_bridge")
+        if bridge and not bridge.closed:
+            await safe_send(bridge, {"type": "wake_pc", "mac": mac, "broadcast": broadcast})
+        else:
+            await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "bridge_offline"})
+        return
+
+    if role == "wake_bridge" and msg.get("type") == "wake_result":
+        if r.get("control"):
+            await safe_send(r["control"], {"type": "wake_result", "ok": bool(msg.get("ok")), "reason": str(msg.get("reason", ""))[:80]})
         return
 
     # أوامر الجوال تذهب إلى الكمبيوتر
@@ -1193,6 +1245,7 @@ HANDLERS = {
     "pc_status": on_pc_status,
 
     "register_agent": on_register_agent,
+    "register_wake_bridge": on_register_wake_bridge,
     "ice_config": on_ice_config,
 }
 
@@ -1258,7 +1311,8 @@ async def enforcer():
                 w for w in (
                     r.get("agent"),
                     r.get("control"),
-                    r.get("pending")
+                    r.get("pending"),
+                    r.get("wake_bridge")
                 )
                 if w
             ]
