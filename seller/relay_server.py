@@ -1065,6 +1065,9 @@ async def on_register_agent(ws, ip, msg):
         await safe_close(old)
 
     r["agent"] = ws
+    mac = str(msg.get("mac", "")).strip().lower()
+    if re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
+        r["agent_mac"] = mac
     ws_info[ws] = (code, "agent")
 
     await safe_send(
@@ -1164,10 +1167,10 @@ async def forward(ws, msg):
         return
 
     if role == "control" and msg.get("type") == "wake_pc":
-        mac = str(msg.get("mac", "")).strip().lower()
-        broadcast = str(msg.get("broadcast", "255.255.255.255")).strip()
+        mac = str(r.get("agent_mac", "")).strip().lower()
+        broadcast = "255.255.255.255"
         if not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
-            return await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "invalid_mac"})
+            return await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "device_mac_unavailable"})
         try:
             import ipaddress
             ipaddress.IPv4Address(broadcast)
