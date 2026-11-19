@@ -205,6 +205,7 @@ def init_db():
         for col in ("username", "pw_salt", "pw_hash", "agent_ip", "agent_name", "agent_token_hash", "wake_bridge_token_hash"):
             if col not in have:
                 c.execute(f"ALTER TABLE licenses ADD COLUMN {col} TEXT")
+        c.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_license_username ON licenses(username)")
     _cloud_dirty()
 
@@ -402,6 +403,28 @@ def get_by_wake_bridge_token(token):
             (token_hash,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def set_central_wake_bridge_token(token):
+    """Persist only a hash for the site owner's single central Wake Bridge."""
+    with db() as c:
+        c.execute(
+            "INSERT INTO app_settings(key, value) VALUES('central_wake_bridge_token_hash', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (hash_token(str(token)),),
+        )
+    return True
+
+
+def check_central_wake_bridge_token(token):
+    if not token:
+        return False
+    with db() as c:
+        row = c.execute(
+            "SELECT value FROM app_settings WHERE key='central_wake_bridge_token_hash'"
+        ).fetchone()
+    stored = row["value"] if row else ""
+    return bool(stored) and hmac.compare_digest(hash_token(str(token)), stored)
 
 
 def check_pin(row, pin):
