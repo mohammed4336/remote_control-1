@@ -13,6 +13,7 @@ import platform
 import os
 import sys
 import subprocess
+import uuid
 from ctypes import wintypes
 
 from webrtc_stream import answer_offer, close_peer
@@ -859,6 +860,7 @@ async def run(
 
     hwid = machine_id()
     name = platform.node()[:60]
+    mac = ":".join(f"{(uuid.getnode() >> shift) & 0xff:02x}" for shift in range(40, -1, -8))
 
     print("=" * 50)
     print("  Remote Control Agent")
@@ -876,6 +878,7 @@ async def run(
                 "username": username,
                 "hwid": hwid,
                 "name": name,
+                "mac": mac,
 
                 **(
                     {"agent_token": agent_token}
