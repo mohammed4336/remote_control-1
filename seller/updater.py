@@ -80,8 +80,13 @@ def _download(url, destination, expected_sha256):
 
 
 def _start_replacement_helper(target, staged, version):
+    """Launch a detached PowerShell helper that replaces and health-checks the EXE."""
     log_path = os.path.join(tempfile.gettempdir(), "remote-control-agent-updater.log")
     failed_marker = target + ".update-failed"
+    helper_path = os.path.join(
+        tempfile.gettempdir(),
+        f"remote-control-agent-replace-{os.getpid()}-{int(time.time())}.ps1",
+    )
     ps = r"""
 $ErrorActionPreference = 'Stop'
 $target = __TARGET__
@@ -90,10 +95,13 @@ $parent = __PARENT__
 $version = __VERSION__
 $log = __LOG__
 $failedMarker = __FAILED__
+$helperPath = __HELPER__
 $directory = [System.IO.Path]::GetDirectoryName($target)
 $name = [System.IO.Path]::GetFileName($target)
 $candidate = Join-Path $directory ($name + '.update')
 $backup = $target + '.previous'
+$stdoutLog = Join-Path $env:TEMP 'remote-control-agent-startup.stdout.log'
+$stderrLog = Join-Path $env:TEMP 'remote-control-agent-startup.stderr.log'
 
 function Write-Log([string]$message) {
     $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
@@ -101,43 +109,53 @@ function Write-Log([string]$message) {
 }
 
 try {
-    Write-Log "Helper started for version $version. Target: $target"
+    Write-Log "Helper started for version $version. Target: $target. Parent PID: $parent"
     $deadline = (Get-Date).AddSeconds(120)
     while (Get-Process -Id $parent -ErrorAction SilentlyContinue) {
         if ((Get-Date) -gt $deadline) { throw 'Parent Agent did not exit within 120 seconds.' }
-        Start-Sleep -Milliseconds 300
+        Start-Sleep -Milliseconds 250
     }
+    Write-Log 'Parent Agent exited; replacement can begin.'
 
-    if (-not (Test-Path -LiteralPath $staged)) { throw 'Staged update file is missing.' }
-    Copy-Item -LiteralPath $staged -Destination $candidate -Force
-    if (-not (Test-Path -LiteralPath $candidate)) { throw 'Candidate copy failed.' }
-
-    $candidateHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash
+    if (-not (Test-Path -LiteralPath $staged -PathType Leaf)) { throw "Staged update is missing: $staged" }
     $stagedHash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash
+    Copy-Item -LiteralPath $staged -Destination $candidate -Force
+    $candidateHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash
     if ($candidateHash -ne $stagedHash) { throw 'Candidate SHA256 does not match staged file.' }
+    Write-Log "Candidate verified ($candidateHash)."
 
     if (Test-Path -LiteralPath $target) {
         Copy-Item -LiteralPath $target -Destination $backup -Force
+        if (-not (Test-Path -LiteralPath $backup -PathType Leaf)) { throw 'Could not create previous-version backup.' }
         Write-Log "Backup created: $backup"
     }
 
     Move-Item -LiteralPath $candidate -Destination $target -Force
-    if (-not (Test-Path -LiteralPath $target)) { throw 'New executable is missing after replacement.' }
-    Write-Log 'New executable installed. Starting it now.'
+    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw 'New executable is missing after replacement.' }
+    $installedHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    if ($installedHash -ne $stagedHash) { throw 'Installed executable hash does not match verified download.' }
+    Write-Log 'New executable installed; launching with captured startup logs.'
 
-    $newProcess = Start-Process -FilePath $target -WorkingDirectory $directory -PassThru
-    $healthDeadline = (Get-Date).AddSeconds(25)
+    Remove-Item -LiteralPath $stdoutLog,$stderrLog -Force -ErrorAction SilentlyContinue
+    $newProcess = Start-Process -FilePath $target -WorkingDirectory $directory -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+    Write-Log "New Agent process started (PID $($newProcess.Id))."
+
+    $healthDeadline = (Get-Date).AddSeconds(40)
     do {
         Start-Sleep -Seconds 1
         $newProcess.Refresh()
         if ($newProcess.HasExited) {
-            throw "Updated Agent exited during startup (exit code $($newProcess.ExitCode))."
+            $exitCode = $newProcess.ExitCode
+            $stderr = ''
+            if (Test-Path -LiteralPath $stderrLog) { $stderr = (Get-Content -LiteralPath $stderrLog -Raw -ErrorAction SilentlyContinue) }
+            if ($stderr.Length -gt 1500) { $stderr = $stderr.Substring(0,1500) }
+            throw "Updated Agent exited during startup (exit code $exitCode). $stderr"
         }
     } while ((Get-Date) -lt $healthDeadline)
 
     Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $failedMarker -Force -ErrorAction SilentlyContinue
-    Write-Log "Version $version remained running for 25 seconds. Update succeeded."
+    Write-Log "Version $version passed 40-second startup check. Update succeeded."
 }
 catch {
     $message = $_.Exception.Message
@@ -145,16 +163,16 @@ catch {
     try { Set-Content -LiteralPath $failedMarker -Value $version -Encoding ASCII } catch {}
     Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
 
-    if (Test-Path -LiteralPath $backup) {
+    if (Test-Path -LiteralPath $backup -PathType Leaf) {
         try {
             Copy-Item -LiteralPath $backup -Destination $target -Force
-            Write-Log 'Previous executable restored.'
+            Write-Log 'Previous executable restored from backup.'
         } catch {
             Write-Log "Rollback failed: $($_.Exception.Message)"
         }
     }
 
-    if (Test-Path -LiteralPath $target) {
+    if (Test-Path -LiteralPath $target -PathType Leaf) {
         try {
             Start-Process -FilePath $target -WorkingDirectory $directory
             Write-Log 'Restored executable launched.'
@@ -162,6 +180,9 @@ catch {
             Write-Log "Could not relaunch restored executable: $($_.Exception.Message)"
         }
     }
+}
+finally {
+    Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue
 }
 """
     replacements = {
@@ -171,27 +192,39 @@ catch {
         "__VERSION__": _ps_quote(version),
         "__LOG__": _ps_quote(log_path),
         "__FAILED__": _ps_quote(failed_marker),
+        "__HELPER__": _ps_quote(helper_path),
     }
     for key, value in replacements.items():
         ps = ps.replace(key, value)
 
+    # Use a standalone script to avoid command-line length and quoting issues.
+    with open(helper_path, "w", encoding="utf-8-sig", newline="\r\n") as stream:
+        stream.write(ps)
+
     flags = (
         getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     )
-    process = subprocess.Popen(
-        [
-            "powershell.exe", "-NoProfile", "-NonInteractive",
-            "-ExecutionPolicy", "Bypass", "-Command", ps,
-        ],
-        creationflags=flags,
-        close_fds=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    _log(f"Replacement helper launched (PID {process.pid}) for {version}.")
-
+    try:
+        process = subprocess.Popen(
+            [
+                "powershell.exe", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", helper_path,
+            ],
+            creationflags=flags,
+            close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        _log(f"Detached replacement helper launched (PID {process.pid}) for {version}; script: {helper_path}.")
+    except Exception:
+        try:
+            os.remove(helper_path)
+        except OSError:
+            pass
+        raise
 
 def check_and_stage(current_version):
     if not getattr(sys, "frozen", False) or os.name != "nt":
