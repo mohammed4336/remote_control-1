@@ -954,15 +954,40 @@ async def on_pair_confirm(ws, ip, msg):
 # تسجيل الـ Agent
 # ----------------------------------------------------------------
 
+async def on_request_wake_bridge_token(ws, ip, msg):
+    info = ws_info.get(ws)
+    if not info or info[1] not in ("authed", "control"):
+        return await fail(ws, "wake_bridge_token", "not_logged_in")
+    code = info[0]
+    row = ldb.get_license(code)
+    if not row:
+        return await fail(ws, "wake_bridge_token", "invalid")
+    ok, reason = ldb.usable(row)
+    if not ok:
+        return await fail(ws, "wake_bridge_token", reason)
+    if not row.get("phone_token_hash"):
+        return await fail(ws, "wake_bridge_token", "phone_not_bound")
+    token = secrets.token_urlsafe(32)
+    if not ldb.set_wake_bridge_token(code, token):
+        return await fail(ws, "wake_bridge_token", "invalid")
+    r = rooms.setdefault(code, {"agent": None, "control": None, "pending": None, "wake_bridge": None})
+    old = r.get("wake_bridge")
+    if old and old is not ws:
+        await safe_close(old)
+    r["wake_bridge"] = None
+    await reply(ws, "wake_bridge_token", ok=True, token=token)
+    await safe_send(ws, {"type": "wake_bridge_offline"})
+
+
 async def on_register_wake_bridge(ws, ip, msg):
-    if over("wake_bridge", ip, 8, 600):
+    if over("wake_bridge", ip, 20, 600):
         return await fail(ws, "wake_bridge_registered", "rate_limited")
-    username = ldb.normalize_username(msg.get("username")) or ""
-    row = ldb.get_by_username(username)
-    code = row and row["code"]
-    if not row or not ldb.check_password(row, msg.get("password", "")):
+    token = str(msg.get("token", "")).strip()
+    row = ldb.get_by_wake_bridge_token(token)
+    if not row:
         record("wake_bridge", ip)
-        return await fail(ws, "wake_bridge_registered", "bad_credentials")
+        return await fail(ws, "wake_bridge_registered", "invalid_bridge_token")
+    code = row["code"]
     ok, reason = ldb.usable(row)
     if not ok or not row.get("phone_token_hash"):
         return await fail(ws, "wake_bridge_registered", reason or "phone_not_bound")
@@ -1250,6 +1275,7 @@ HANDLERS = {
 
     "register_agent": on_register_agent,
     "register_wake_bridge": on_register_wake_bridge,
+    "request_wake_bridge_token": on_request_wake_bridge_token,
     "ice_config": on_ice_config,
 }
 
