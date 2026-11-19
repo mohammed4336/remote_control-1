@@ -760,14 +760,14 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
       </div>
 
       <div class="field glass" style="margin-top:12px">
-        <label>ربط وسيط التشغيل (مرة واحدة لكل منزل)</label>
+        <label>الوسيط المركزي للموقع (جهاز واحد لجميع العملاء)</label>
         <div style="font-size:12px;line-height:1.8;opacity:.85;margin:6px 0 10px">
-          نزّل البرنامج على جهاز يبقى شغالًا داخل نفس شبكة الكمبيوتر. أنشئ رمزًا من هنا وأدخله في البرنامج أول مرة فقط؛ بعدها يتصل تلقائيًا دون اسم مستخدم أو كلمة مرور.
+          شغّل البرنامج على البي سي المركزي عندك واتركه متصلًا بالإنترنت. حساب مالك الموقع فقط يستطيع إنشاء رمز الربط. الوسيط يستقبل أوامر جميع الحسابات من اتصال واحد؛ ويحتاج الوصول إلى شبكة العميل عبر شبكة محلية مشتركة أو VPN موجّه حتى تصل حزمة الإيقاظ.
         </div>
-        <button class="btn ghost" id="makeWakeTokenBtn" type="button" style="width:100%">إنشاء رمز ربط الوسيط</button>
+        <button class="btn ghost" id="makeWakeTokenBtn" type="button" style="width:100%">إنشاء رمز الوسيط المركزي (للمالك فقط)</button>
         <div id="wakeTokenBox" style="display:none;margin-top:10px">
           <div id="wakeTokenValue" dir="ltr" style="font-family:monospace;word-break:break-all;text-align:center;padding:12px;background:rgba(0,0,0,.22);border-radius:10px;letter-spacing:1px"></div>
-          <div style="font-size:11px;opacity:.75;margin-top:6px">هذا الرمز سري مثل كلمة المرور. أدخله في Wake Bridge على الجهاز الوسيط ولا تشاركه مع أحد. إنشاء رمز جديد يلغي الرمز السابق.</div>
+          <div style="font-size:11px;opacity:.75;margin-top:6px">هذا الرمز سري. أدخله مرة واحدة في Wake Bridge على البي سي المركزي. إنشاء رمز جديد يلغي الرمز السابق ويقطع اتصال الوسيط الحالي.</div>
         </div>
         <a href="https://github.com/mohammed4336/remote_control-1/releases/latest/download/wake-bridge.exe" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:10px;color:var(--teal);font-size:13px">⬇ تحميل Wake Bridge</a>
       </div>
@@ -1633,16 +1633,16 @@ function onMessage(ev){
     if(msg.ok && msg.token){
       $('wakeTokenValue').textContent=msg.token;
       $('wakeTokenBox').style.display='';
-      setInfo('تم إنشاء رمز الربط. أدخله في Wake Bridge على الجهاز الوسيط مرة واحدة.');
+      setInfo('تم إنشاء رمز الوسيط المركزي. أدخله مرة واحدة في Wake Bridge على البي سي المركزي.');
     }else{
       setInfo('');
       setErr(failText(msg));
     }
   }else if(t==='wake_bridge_online'){
-    wakeStatus.textContent='وسيط التشغيل متصل داخل المنزل. يمكنك إرسال أمر التشغيل.';
+    wakeStatus.textContent='الوسيط المركزي متصل. يمكنه استقبال أوامر الحسابات.';
     showToast('وسيط التشغيل متصل');
   }else if(t==='wake_bridge_offline'){
-    wakeStatus.textContent='وسيط التشغيل غير متصل. لن يعمل التشغيل عن بُعد حتى يتصل جهاز وسيط بالشبكة المنزلية.';
+    wakeStatus.textContent='الوسيط المركزي غير متصل. لن تصل أوامر الإيقاظ حتى يعود اتصال البي سي المركزي.';
     showToast('وسيط التشغيل غير متصل');
   }else if(t==='wake_result'){
     if(msg.ok){
