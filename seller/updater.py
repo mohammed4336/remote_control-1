@@ -13,7 +13,9 @@ import urllib.request
 OWNER = "mohammed4336"
 REPO = "remote_control-1"
 API_LATEST = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"
-CHECK_INTERVAL = 6 * 60 * 60
+CHECK_INTERVAL = 15 * 60
+RETRY_INTERVAL = 5 * 60
+FAILED_UPDATE_COOLDOWN = 15 * 60
 MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 
 
@@ -160,7 +162,7 @@ try {
 catch {
     $message = $_.Exception.Message
     Write-Log "UPDATE FAILED: $message"
-    try { Set-Content -LiteralPath $failedMarker -Value $version -Encoding ASCII } catch {}
+    try { Set-Content -LiteralPath $failedMarker -Value "$version|$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" -Encoding ASCII } catch {}
     Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
 
     if (Test-Path -LiteralPath $backup -PathType Leaf) {
@@ -246,11 +248,16 @@ def check_and_stage(current_version):
     failed_marker = target + ".update-failed"
     try:
         with open(failed_marker, "r", encoding="ascii") as stream:
-            failed_version = stream.read().strip()
-        if failed_version == latest:
-            _log(f"Skipping version {latest}; a previous attempt failed. Install it manually or remove the marker after diagnosis.")
+            marker = stream.read().strip().split("|", 1)
+        failed_version = marker[0]
+        failed_at = int(marker[1]) if len(marker) == 2 else 0
+        if failed_version == latest and failed_at and (time.time() - failed_at) < FAILED_UPDATE_COOLDOWN:
+            remaining = int(FAILED_UPDATE_COOLDOWN - (time.time() - failed_at))
+            _log(f"Previous update attempt for {latest} failed; retrying automatically in about {remaining}s.")
             return False
-    except OSError:
+        if failed_version == latest:
+            _log(f"Retry cooldown expired for {latest}; trying the update again.")
+    except (OSError, ValueError):
         pass
 
     assets = {
@@ -303,8 +310,10 @@ def start_auto_updater(current_version):
                     os._exit(0)
             except Exception as exc:
                 _log(f"Update check failed: {exc}")
-                print(f"[UPDATE] Check failed (will retry): {exc}", flush=True)
-            time.sleep(CHECK_INTERVAL)
+                print(f"[UPDATE] Check failed (will retry in {RETRY_INTERVAL}s): {exc}", flush=True)
+                time.sleep(RETRY_INTERVAL)
+            else:
+                time.sleep(CHECK_INTERVAL)
 
     threading.Thread(
         target=worker,
