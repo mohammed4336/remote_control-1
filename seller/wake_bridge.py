@@ -117,13 +117,17 @@ async def run():
                                 str(msg.get("mac", "")),
                                 str(msg.get("broadcast", "255.255.255.255")),
                             )
-                            await ws.send_json({"type": "wake_result", "ok": True})
+                            await ws.send_json({
+                                "type": "wake_result", "ok": True,
+                                "request_id": msg.get("request_id", "")
+                            })
                             print("[OK] تم إرسال إشارة التشغيل.")
                         except Exception as exc:
                             await ws.send_json({
                                 "type": "wake_result",
                                 "ok": False,
                                 "reason": str(exc)[:80],
+                                "request_id": msg.get("request_id", ""),
                             })
         except KeyboardInterrupt:
             break
