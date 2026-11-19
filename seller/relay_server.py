@@ -1148,6 +1148,9 @@ async def on_register_agent(ws, ip, msg):
 
 async def cleanup(ws):
     global central_wake_bridge
+    for request_id, target in list(central_wake_pending.items()):
+        if target is ws:
+            central_wake_pending.pop(request_id, None)
     for code, data in list(pending_pairs.items()):
         if data["ws"] is ws:
             pending_pairs.pop(code, None)
@@ -1161,6 +1164,13 @@ async def cleanup(ws):
     if role == "central_wake_bridge":
         if central_wake_bridge is ws:
             central_wake_bridge = None
+            for request_id, target in list(central_wake_pending.items()):
+                central_wake_pending.pop(request_id, None)
+                if target and not target.closed:
+                    await safe_send(target, {
+                        "type": "wake_result", "ok": False,
+                        "reason": "bridge_offline"
+                    })
             for room in rooms.values():
                 control = room.get("control")
                 if control:
