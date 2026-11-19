@@ -251,6 +251,19 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
   transform:translateY(100%);
   transition:transform .28s cubic-bezier(.2,.9,.25,1);
 }
+/* منع قص قائمة الطاقة على الشاشات القصيرة: اجعلها قابلة للتمرير */
+.sheet{
+  max-height: min(88dvh, 760px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(18px + env(safe-area-inset-bottom));
+}
+#powerOverlay .sheet{max-height: min(90dvh, 820px);}
+#powerOverlay .power-menu{flex:0 0 auto;}
+#powerOverlay .power-item{min-height:68px;}
+#powerOverlay .hold-btn{flex:0 0 56px;}
+#powerOverlay #powerClose{flex:0 0 auto;}
 .sheet-overlay.show{display:flex;}
 .sheet-overlay.show .sheet{transform:translateY(0);}
 .sheet-handle{
