@@ -49,6 +49,8 @@ AUTH_FAIL_LIMIT = 5
 AUTH_LOCK_SECONDS = 900
 
 rooms = {}
+central_wake_bridge = None
+central_wake_pending = {}
 ws_info = {}
 otp_state = {}
 
@@ -408,7 +410,7 @@ async def start_session(ws, row, new_token=None):
         username=row["username"],
         pc={
             "online": bool(r.get("agent")),
-            "wake_bridge": bool(r.get("wake_bridge") and not r["wake_bridge"].closed),
+            "wake_bridge": bool(central_wake_bridge and not central_wake_bridge.closed),
             "name": row.get("agent_name") or ""
         },
         **extra
@@ -671,7 +673,7 @@ async def on_connect_pc(ws, ip, msg):
     code = info[0]
     r = rooms.get(code)
 
-    if not r or not (r.get("agent") or (r.get("wake_bridge") and not r["wake_bridge"].closed)):
+    if not r or not (r.get("agent") or (central_wake_bridge and not central_wake_bridge.closed)):
         return await fail(
             ws,
             "auth_result",
@@ -715,7 +717,7 @@ async def on_pc_status(ws, ip, msg):
             ws,
             "pc_status",
             online=bool(r.get("agent")),
-            wake_bridge=bool(r.get("wake_bridge") and not r["wake_bridge"].closed),
+            wake_bridge=bool(central_wake_bridge and not central_wake_bridge.closed),
             name=row.get("agent_name") or ""
         )
 
@@ -955,34 +957,56 @@ async def on_pair_confirm(ws, ip, msg):
 # ----------------------------------------------------------------
 
 async def on_request_wake_bridge_token(ws, ip, msg):
+    global central_wake_bridge
     info = ws_info.get(ws)
     if not info or info[1] not in ("authed", "control"):
         return await fail(ws, "wake_bridge_token", "not_logged_in")
-    code = info[0]
-    row = ldb.get_license(code)
-    if not row:
-        return await fail(ws, "wake_bridge_token", "invalid")
+
+    # Only the configured site-owner account may rotate the shared bridge token.
+    owner = os.environ.get("CENTRAL_WAKE_BRIDGE_OWNER", "").strip().lower()
+    row = ldb.get_license(info[0])
+    if not owner or not row or (row.get("username") or "").lower() != owner:
+        return await fail(ws, "wake_bridge_token", "central_owner_only")
+
     ok, reason = ldb.usable(row)
     if not ok:
         return await fail(ws, "wake_bridge_token", reason)
-    if not row.get("phone_token_hash"):
-        return await fail(ws, "wake_bridge_token", "phone_not_bound")
+
     token = secrets.token_urlsafe(32)
-    if not ldb.set_wake_bridge_token(code, token):
-        return await fail(ws, "wake_bridge_token", "invalid")
-    r = rooms.setdefault(code, {"agent": None, "control": None, "pending": None, "wake_bridge": None})
-    old = r.get("wake_bridge")
+    ldb.set_central_wake_bridge_token(token)
+    old = central_wake_bridge
+    central_wake_bridge = None
     if old and old is not ws:
         await safe_close(old)
-    r["wake_bridge"] = None
-    await reply(ws, "wake_bridge_token", ok=True, token=token)
-    await safe_send(ws, {"type": "wake_bridge_offline"})
+
+    await reply(ws, "wake_bridge_token", ok=True, token=token, central=True)
+    for room in rooms.values():
+        control = room.get("control")
+        if control:
+            await safe_send(control, {"type": "wake_bridge_offline"})
 
 
 async def on_register_wake_bridge(ws, ip, msg):
+    global central_wake_bridge
     if over("wake_bridge", ip, 20, 600):
         return await fail(ws, "wake_bridge_registered", "rate_limited")
     token = str(msg.get("token", "")).strip()
+
+    # Preferred mode: one site-owned bridge serves all account rooms.
+    if ldb.check_central_wake_bridge_token(token):
+        old = central_wake_bridge
+        if old and old is not ws:
+            await safe_close(old)
+        central_wake_bridge = ws
+        ws_info[ws] = ("__central__", "central_wake_bridge")
+        await reply(ws, "wake_bridge_registered", ok=True, central=True)
+        for room in rooms.values():
+            control = room.get("control")
+            if control:
+                await safe_send(control, {"type": "wake_bridge_online"})
+        return
+
+    # Keep existing per-account tokens working during migration.
     row = ldb.get_by_wake_bridge_token(token)
     if not row:
         record("wake_bridge", ip)
@@ -1123,6 +1147,7 @@ async def on_register_agent(ws, ip, msg):
 # ----------------------------------------------------------------
 
 async def cleanup(ws):
+    global central_wake_bridge
     for code, data in list(pending_pairs.items()):
         if data["ws"] is ws:
             pending_pairs.pop(code, None)
@@ -1133,8 +1158,16 @@ async def cleanup(ws):
         return
 
     code, role = info
-    r = rooms.get(code)
+    if role == "central_wake_bridge":
+        if central_wake_bridge is ws:
+            central_wake_bridge = None
+            for room in rooms.values():
+                control = room.get("control")
+                if control:
+                    await safe_send(control, {"type": "wake_bridge_offline"})
+        return
 
+    r = rooms.get(code)
     if not r:
         return
 
@@ -1180,30 +1213,44 @@ async def cleanup(ws):
 
 async def forward(ws, msg):
     info = ws_info.get(ws)
-
-
     if not info:
         return
 
     code, role = info
-    r = rooms.get(code)
 
+    # Replies from the one central bridge are correlated to the requesting account session.
+    if role == "central_wake_bridge":
+        if msg.get("type") == "wake_result":
+            request_id = str(msg.get("request_id", ""))
+            target = central_wake_pending.pop(request_id, None)
+            if target and not target.closed:
+                await safe_send(target, {
+                    "type": "wake_result",
+                    "ok": bool(msg.get("ok")),
+                    "reason": str(msg.get("reason", ""))[:80]
+                })
+        return
+
+    r = rooms.get(code)
     if not r:
         return
 
     if role == "control" and msg.get("type") == "wake_pc":
         mac = str(r.get("agent_mac", "")).strip().lower()
-        broadcast = "255.255.255.255"
         if not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
             return await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "device_mac_unavailable"})
-        try:
-            import ipaddress
-            ipaddress.IPv4Address(broadcast)
-        except Exception:
-            return await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "invalid_broadcast"})
-        bridge = r.get("wake_bridge")
+
+        bridge = central_wake_bridge
         if bridge and not bridge.closed:
-            await safe_send(bridge, {"type": "wake_pc", "mac": mac, "broadcast": broadcast})
+            request_id = secrets.token_urlsafe(18)
+            central_wake_pending[request_id] = ws
+            await safe_send(bridge, {
+                "type": "wake_pc",
+                "mac": mac,
+                "broadcast": "255.255.255.255",
+                "request_id": request_id,
+                "account_code": code
+            })
         else:
             await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "bridge_offline"})
         return
@@ -1213,11 +1260,9 @@ async def forward(ws, msg):
             await safe_send(r["control"], {"type": "wake_result", "ok": bool(msg.get("ok")), "reason": str(msg.get("reason", ""))[:80]})
         return
 
-    # أوامر الجوال تذهب إلى الكمبيوتر
+    # Existing remote-control traffic is unchanged.
     if role == "control" and r.get("agent"):
         await safe_send(r["agent"], msg)
-
-    # رسائل الكمبيوتر ترجع إلى الجوال
     elif (
         role == "agent"
         and r.get("control")
