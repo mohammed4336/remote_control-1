@@ -103,4 +103,4 @@ jobs:
             dist/update.json
           fail_on_unmatched_files: true
 
-# Release v1.1.1: automatic Agent updater recovery and diagnostics.
+# Release v1.1.4: hardened Agent self-update replacement and rollback.
