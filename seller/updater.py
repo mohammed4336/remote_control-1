@@ -211,9 +211,11 @@ finally {
     with open(helper_path, "w", encoding="utf-8-sig", newline="\r\n") as stream:
         stream.write(ps)
 
+    # Do not combine DETACHED_PROCESS with redirected standard handles here.
+    # Use a normal hidden child process so Windows PowerShell reliably executes
+    # the helper script and can write its startup marker.
     flags = (
-        getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
         | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     )
     try:
@@ -221,6 +223,7 @@ finally {
             os.environ.get("WINDIR", r"C:\Windows"),
             "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
         )
+        _log(f"Launching PowerShell helper: {powershell}; script: {helper_path}.")
         with open(helper_stdout, "ab") as stdout_stream, open(helper_stderr, "ab") as stderr_stream:
             process = subprocess.Popen(
                 [
@@ -254,19 +257,13 @@ finally {
                 process.terminate()
         except Exception:
             pass
-        reason = f"Replacement helper did not confirm startup within 12 seconds (exit={process.poll()})."
+        reason = f"Replacement helper did not confirm startup within 12 seconds (exit={process.poll()}); script retained at {helper_path} for diagnosis."
         if detail:
             reason += f" PowerShell stderr: {detail}"
         raise RuntimeError(reason)
     except Exception:
-        try:
-            os.remove(helper_path)
-        except OSError:
-            pass
-        try:
-            os.remove(started_marker)
-        except OSError:
-            pass
+        # Keep the helper script and marker for diagnosis. They are small and
+        # are overwritten only by a later uniquely named attempt.
         raise
 
 def check_and_stage(current_version):
