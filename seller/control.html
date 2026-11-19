@@ -1605,8 +1605,10 @@ function onMessage(ev){
     }
 
   }else if(t==='wake_bridge_online'){
+    wakeStatus.textContent='وسيط التشغيل متصل داخل المنزل. يمكنك إرسال أمر التشغيل.';
     showToast('وسيط التشغيل متصل');
   }else if(t==='wake_bridge_offline'){
+    wakeStatus.textContent='وسيط التشغيل غير متصل. لن يعمل التشغيل عن بُعد حتى يتصل جهاز وسيط بالشبكة المنزلية.';
     showToast('وسيط التشغيل غير متصل');
   }else if(t==='wake_result'){
     if(msg.ok){
