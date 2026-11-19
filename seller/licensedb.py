@@ -202,9 +202,10 @@ def init_db():
             )"""
         )
         have = {r["name"] for r in c.execute("PRAGMA table_info(licenses)")}
-        for col in ("username", "pw_salt", "pw_hash", "agent_ip", "agent_name", "agent_token_hash", "wake_bridge_token_hash"):
+        for col in ("username", "pw_salt", "pw_hash", "agent_ip", "agent_name", "agent_mac", "agent_token_hash", "wake_bridge_token_hash"):
             if col not in have:
                 c.execute(f"ALTER TABLE licenses ADD COLUMN {col} TEXT")
+        c.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_license_username ON licenses(username)")
     _cloud_dirty()
 
@@ -326,7 +327,7 @@ def reset(code, what="all"):
     """يفك ربط الجهاز/الجوال (مثلاً المشتري غيّر كمبيوتره أو جواله)."""
     sets = []
     if what in ("agent", "all"):
-        sets += ["agent_hash=NULL", "agent_ip=NULL", "agent_name=NULL", "agent_token_hash=NULL"]
+        sets += ["agent_hash=NULL", "agent_ip=NULL", "agent_name=NULL", "agent_mac=NULL", "agent_token_hash=NULL"]
     if what in ("phone", "all"):
         sets += ["phone_token_hash=NULL", "pin_salt=NULL", "pin_hash=NULL", "phone_binds=0", "wake_bridge_token_hash=NULL"]
     if not sets:
@@ -404,6 +405,28 @@ def get_by_wake_bridge_token(token):
     return dict(row) if row else None
 
 
+def set_central_wake_bridge_token(token):
+    """Persist only a hash for the site owner's single central Wake Bridge."""
+    with db() as c:
+        c.execute(
+            "INSERT INTO app_settings(key, value) VALUES('central_wake_bridge_token_hash', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (hash_token(str(token)),),
+        )
+    return True
+
+
+def check_central_wake_bridge_token(token):
+    if not token:
+        return False
+    with db() as c:
+        row = c.execute(
+            "SELECT value FROM app_settings WHERE key='central_wake_bridge_token_hash'"
+        ).fetchone()
+    stored = row["value"] if row else ""
+    return bool(stored) and hmac.compare_digest(hash_token(str(token)), stored)
+
+
 def check_pin(row, pin):
     if not row.get("pin_hash") or not row.get("pin_salt"):
         return False
@@ -465,6 +488,11 @@ def check_password(row, password):
 def set_agent_info(code, ip, name):
     with db() as c:
         c.execute("UPDATE licenses SET agent_ip=?, agent_name=? WHERE code=?", (ip, name, code))
+
+
+def set_agent_mac(code, mac):
+    with db() as c:
+        c.execute("UPDATE licenses SET agent_mac=? WHERE code=?", (mac, code))
 
 
 def set_agent_token(code, token):
