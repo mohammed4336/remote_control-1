@@ -875,12 +875,10 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
     </div>
     <div style="margin:14px 0;padding:14px;border:1px solid rgba(255,255,255,.14);border-radius:14px">
       <div style="font-weight:700;margin-bottom:8px">⚡ التشغيل الذكي للكمبيوتر</div>
-      <div style="font-size:12px;opacity:.78;margin-bottom:10px">احفظ عنوان MAC مرة واحدة فقط. عنوان الشبكة يُضبط تلقائيًا.</div>
-      <input id="wakeMac" type="text" maxlength="17" placeholder="عنوان MAC مثال: AA:BB:CC:DD:EE:FF" autocomplete="off" style="width:100%;box-sizing:border-box;margin:5px 0;padding:12px;border-radius:10px;background:rgba(0,0,0,.22);color:inherit;border:1px solid rgba(255,255,255,.2)">
+      <div style="font-size:12px;opacity:.78;margin-bottom:10px">يتعرّف الموقع على جهازك تلقائيًا ويحفظ بيانات الشبكة عند اتصال البرنامج.</div>
       <button class="btn" id="wakePcBtn" style="width:100%;margin-top:7px">⚡ تشغيل الكمبيوتر</button>
-      <div id="wakeStatus" style="font-size:12px;line-height:1.8;margin-top:9px;opacity:.8">يتطلب وسيط تشغيل متصلًا داخل شبكة المنزل، وأن تكون ميزة Wake-on-LAN مدعومة ومفعّلة.</div>
-      <a href="https://github.com/mohammed4336/remote_control-1/releases/latest/download/wake-bridge.exe" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:10px;color:#9fe19b;font-size:13px">تنزيل وسيط التشغيل (Wake Bridge)</a>
-      <div style="font-size:11px;opacity:.65;margin-top:8px">لا تفتح منافذ في الراوتر. إذا لم يوجد جهاز وسيط يعمل داخل المنزل، فلن يمكن إرسال أمر التشغيل والكمبيوتر مطفأ.</div>
+      <div id="wakeStatus" style="font-size:12px;line-height:1.8;margin-top:9px;opacity:.8">سيتم فحص جاهزية التشغيل تلقائيًا عند الضغط.</div>
+      <div style="font-size:11px;opacity:.65;margin-top:8px">يتطلب وسيطًا داخل الشبكة المنزلية وميزة Wake-on-LAN مفعّلة في الكمبيوتر والراوتر.</div>
     </div>
 
     <button class="btn ghost" id="powerClose">إغلاق</button>
@@ -2129,25 +2127,15 @@ document.querySelector('[data-action="power"]').addEventListener('click',()=>{
 document.getElementById('powerClose').addEventListener('click',()=>{
   document.getElementById('powerOverlay').classList.remove('show');
 });
-const wakeMacInput=document.getElementById('wakeMac');
 const wakeStatus=document.getElementById('wakeStatus');
-try{wakeMacInput.value=localStorage.getItem('rc_wake_mac')||'';}catch(e){}
-wakeMacInput.addEventListener('change',()=>{
-  const value=wakeMacInput.value.trim().toLowerCase();
-  if(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(value)){
-    try{localStorage.setItem('rc_wake_mac',value);}catch(e){}
-  }
-});
 document.getElementById('wakePcBtn').addEventListener('click',()=>{
-  const mac=wakeMacInput.value.trim().toLowerCase();
-  if(!/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)){
-    wakeStatus.textContent='أدخل عنوان MAC الصحيح مرة واحدة ليتم حفظه على هذا الجوال.';
-    showToast('أدخل عنوان MAC الصحيح أولًا');return;
+  if(!ws || ws.readyState!==1){
+    wakeStatus.textContent='اتصل بالخادم أولًا ثم أعد المحاولة.';
+    showToast('الجهاز غير متصل بالخادم');return;
   }
-  try{localStorage.setItem('rc_wake_mac',mac);}catch(e){}
-  wakeStatus.textContent='جارٍ التحقق من وسيط التشغيل وإرسال الطلب...';
-  send({type:'wake_pc',mac,broadcast:'255.255.255.255'});
-  showToast('جارٍ إرسال طلب التشغيل...');
+  wakeStatus.textContent='جارٍ فحص بيانات الكمبيوتر ووسيط التشغيل...';
+  send({type:'wake_pc'});
+  showToast('جارٍ فحص إمكانية التشغيل...');
 });
 
 document.getElementById('streamToggleBtn').addEventListener('click',()=>{
