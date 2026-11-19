@@ -75,7 +75,8 @@ def send_magic_packet(mac, broadcast):
 async def run():
     print("=" * 58)
     print("Remote Control - Wake Bridge")
-    print("هذا الجهاز يجب أن يبقى شغالًا ومتصلًا بشبكة الكمبيوتر المستهدف.")
+    print("هذا هو الوسيط المركزي للموقع. يجب أن يبقى شغالًا ومتصلًا بالإنترنت.")
+    print("الإيقاظ يحتاج أن تكون شبكة الهدف على نفس LAN أو VPN يمرر broadcast.")
     print("=" * 58)
 
     token = load_token() or ask_token()
@@ -99,7 +100,7 @@ async def run():
                             raise ValueError("انتهت صلاحية رمز الربط أو أُلغي. افتح الموقع وأنشئ رمزًا جديدًا.")
                         raise RuntimeError("فشل التسجيل: " + reason)
 
-                    print("[OK] تم الربط بالحساب. ينتظر أوامر التشغيل...")
+                    print("[OK] تم ربط الوسيط المركزي بالموقع. ينتظر أوامر جميع الحسابات...")
                     print("يمكنك إغلاق هذه النافذة فقط إذا أردت إيقاف وسيط التشغيل.")
                     delay = 3
 
