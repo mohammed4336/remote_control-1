@@ -89,6 +89,9 @@ def _start_replacement_helper(target, staged, version):
         tempfile.gettempdir(),
         f"remote-control-agent-replace-{os.getpid()}-{int(time.time())}.ps1",
     )
+    started_marker = helper_path + ".started"
+    helper_stdout = os.path.join(tempfile.gettempdir(), "remote-control-agent-helper.stdout.log")
+    helper_stderr = os.path.join(tempfile.gettempdir(), "remote-control-agent-helper.stderr.log")
     ps = r"""
 $ErrorActionPreference = 'Stop'
 $target = __TARGET__
@@ -98,6 +101,7 @@ $version = __VERSION__
 $log = __LOG__
 $failedMarker = __FAILED__
 $helperPath = __HELPER__
+$startedMarker = __STARTED__
 $directory = [System.IO.Path]::GetDirectoryName($target)
 $name = [System.IO.Path]::GetFileName($target)
 $candidate = Join-Path $directory ($name + '.update')
@@ -111,6 +115,7 @@ function Write-Log([string]$message) {
 }
 
 try {
+    Set-Content -LiteralPath $startedMarker -Value "started" -Encoding ASCII
     Write-Log "Helper started for version $version. Target: $target. Parent PID: $parent"
     $deadline = (Get-Date).AddSeconds(120)
     while (Get-Process -Id $parent -ErrorAction SilentlyContinue) {
@@ -185,6 +190,7 @@ catch {
 }
 finally {
     Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $startedMarker -Force -ErrorAction SilentlyContinue
 }
 """
     replacements = {
@@ -195,6 +201,7 @@ finally {
         "__LOG__": _ps_quote(log_path),
         "__FAILED__": _ps_quote(failed_marker),
         "__HELPER__": _ps_quote(helper_path),
+        "__STARTED__": _ps_quote(started_marker),
     }
     for key, value in replacements.items():
         ps = ps.replace(key, value)
@@ -209,21 +216,54 @@ finally {
         | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     )
     try:
-        process = subprocess.Popen(
-            [
-                "powershell.exe", "-NoProfile", "-NonInteractive",
-                "-ExecutionPolicy", "Bypass", "-File", helper_path,
-            ],
-            creationflags=flags,
-            close_fds=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        powershell = os.path.join(
+            os.environ.get("WINDIR", r"C:\Windows"),
+            "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
         )
-        _log(f"Detached replacement helper launched (PID {process.pid}) for {version}; script: {helper_path}.")
+        with open(helper_stdout, "ab") as stdout_stream, open(helper_stderr, "ab") as stderr_stream:
+            process = subprocess.Popen(
+                [
+                    powershell, "-NoLogo", "-NoProfile", "-NonInteractive",
+                    "-ExecutionPolicy", "Bypass", "-File", helper_path,
+                ],
+                creationflags=flags,
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_stream,
+                stderr=stderr_stream,
+            )
+        _log(f"Replacement helper process created (PID {process.pid}) for {version}; awaiting startup confirmation.")
+        # Do not terminate the Agent until the helper confirms that PowerShell
+        # actually started and began executing the replacement script.
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            if os.path.isfile(started_marker):
+                _log(f"Replacement helper confirmed startup (PID {process.pid}) for {version}; script: {helper_path}.")
+                return
+            if process.poll() is not None:
+                break
+            time.sleep(0.2)
+        try:
+            with open(helper_stderr, "r", encoding="utf-8", errors="replace") as stream:
+                detail = stream.read()[-2000:].strip()
+        except OSError:
+            detail = ""
+        try:
+            if process.poll() is None:
+                process.terminate()
+        except Exception:
+            pass
+        reason = f"Replacement helper did not confirm startup within 12 seconds (exit={process.poll()})."
+        if detail:
+            reason += f" PowerShell stderr: {detail}"
+        raise RuntimeError(reason)
     except Exception:
         try:
             os.remove(helper_path)
+        except OSError:
+            pass
+        try:
+            os.remove(started_marker)
         except OSError:
             pass
         raise
