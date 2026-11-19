@@ -26,7 +26,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageGrab
 from updater import start_auto_updater
 
-APP_VERSION = "1.1.7"
+APP_VERSION = "1.1.8"
 
 
 # =========================================================
@@ -1300,8 +1300,20 @@ async def run(
 # MAIN
 # =========================================================
 
+def _signal_update_startup():
+    """Tell the replacement helper that the PyInstaller child reached Python."""
+    marker = os.environ.pop("RC_UPDATE_HEALTH_FILE", "")
+    if marker:
+        try:
+            with open(marker, "w", encoding="ascii") as stream:
+                stream.write("started")
+        except OSError as exc:
+            print("[UPDATE] Could not write startup health marker:", exc, flush=True)
+
+
 def main():
 
+    _signal_update_startup()
     start_auto_updater(APP_VERSION)
     cfg = load_config()
 
