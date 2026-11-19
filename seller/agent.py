@@ -26,7 +26,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageGrab
 from updater import start_auto_updater
 
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 
 
 # =========================================================
