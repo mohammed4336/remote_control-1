@@ -106,8 +106,7 @@ $directory = [System.IO.Path]::GetDirectoryName($target)
 $name = [System.IO.Path]::GetFileName($target)
 $candidate = Join-Path $directory ($name + '.update')
 $backup = $target + '.previous'
-$stdoutLog = Join-Path $env:TEMP 'remote-control-agent-startup.stdout.log'
-$stderrLog = Join-Path $env:TEMP 'remote-control-agent-startup.stderr.log'
+$healthMarker = $target + '.update-started'
 
 function Write-Log([string]$message) {
     $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
@@ -141,28 +140,30 @@ try {
     if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw 'New executable is missing after replacement.' }
     $installedHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
     if ($installedHash -ne $stagedHash) { throw 'Installed executable hash does not match verified download.' }
-    Write-Log 'New executable installed; launching with captured startup logs.'
+    Write-Log 'New executable installed; launching and waiting for Python startup handshake.'
 
-    Remove-Item -LiteralPath $stdoutLog,$stderrLog -Force -ErrorAction SilentlyContinue
-    $newProcess = Start-Process -FilePath $target -WorkingDirectory $directory -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
-    Write-Log "New Agent process started (PID $($newProcess.Id))."
+    Remove-Item -LiteralPath $healthMarker -Force -ErrorAction SilentlyContinue
+    $env:RC_UPDATE_HEALTH_FILE = $healthMarker
+    $newProcess = Start-Process -FilePath $target -WorkingDirectory $directory -PassThru
+    Write-Log "New Agent bootstrap process started (PID $($newProcess.Id))."
 
-    $healthDeadline = (Get-Date).AddSeconds(40)
-    do {
-        Start-Sleep -Seconds 1
-        $newProcess.Refresh()
-        if ($newProcess.HasExited) {
-            $exitCode = $newProcess.ExitCode
-            $stderr = ''
-            if (Test-Path -LiteralPath $stderrLog) { $stderr = (Get-Content -LiteralPath $stderrLog -Raw -ErrorAction SilentlyContinue) }
-            if ($stderr.Length -gt 1500) { $stderr = $stderr.Substring(0,1500) }
-            throw "Updated Agent exited during startup (exit code $exitCode). $stderr"
-        }
-    } while ((Get-Date) -lt $healthDeadline)
+    # PyInstaller --onefile starts a short-lived bootloader parent and a separate
+    # Python child. The parent PID exiting is normal; wait for the actual Python
+    # entry point to create this marker instead of treating the bootloader exit
+    # as an application crash.
+    $healthDeadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $healthDeadline) {
+        if (Test-Path -LiteralPath $healthMarker -PathType Leaf) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not (Test-Path -LiteralPath $healthMarker -PathType Leaf)) {
+        throw 'Updated Agent did not reach its Python startup entry point within 60 seconds.'
+    }
 
+    Remove-Item -LiteralPath $healthMarker -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $failedMarker -Force -ErrorAction SilentlyContinue
-    Write-Log "Version $version passed 40-second startup check. Update succeeded."
+    Write-Log "Version $version reached Python startup successfully. Update succeeded."
 }
 catch {
     $message = $_.Exception.Message
