@@ -410,7 +410,7 @@ async def start_session(ws, row, new_token=None):
         username=row["username"],
         pc={
             "online": bool(r.get("agent")),
-            "wake_bridge": bool(central_wake_bridge and not central_wake_bridge.closed),
+            "wake_bridge": bool((central_wake_bridge and not central_wake_bridge.closed) or (r.get("wake_bridge") and not r["wake_bridge"].closed)),
             "name": row.get("agent_name") or ""
         },
         **extra
@@ -673,7 +673,7 @@ async def on_connect_pc(ws, ip, msg):
     code = info[0]
     r = rooms.get(code)
 
-    if not r or not (r.get("agent") or (central_wake_bridge and not central_wake_bridge.closed)):
+    if not r or not (r.get("agent") or (central_wake_bridge and not central_wake_bridge.closed) or (r.get("wake_bridge") and not r["wake_bridge"].closed)):
         return await fail(
             ws,
             "auth_result",
@@ -717,7 +717,7 @@ async def on_pc_status(ws, ip, msg):
             ws,
             "pc_status",
             online=bool(r.get("agent")),
-            wake_bridge=bool(central_wake_bridge and not central_wake_bridge.closed),
+            wake_bridge=bool((central_wake_bridge and not central_wake_bridge.closed) or (r.get("wake_bridge") and not r["wake_bridge"].closed)),
             name=row.get("agent_name") or ""
         )
 
@@ -1264,7 +1264,12 @@ async def forward(ws, msg):
                 "account_code": code
             })
         else:
-            await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "bridge_offline"})
+            # Temporary compatibility for accounts still using their old dedicated bridge.
+            bridge = r.get("wake_bridge")
+            if bridge and not bridge.closed:
+                await safe_send(bridge, {"type": "wake_pc", "mac": mac, "broadcast": "255.255.255.255"})
+            else:
+                await safe_send(ws, {"type": "wake_result", "ok": False, "reason": "bridge_offline"})
         return
 
     if role == "wake_bridge" and msg.get("type") == "wake_result":
