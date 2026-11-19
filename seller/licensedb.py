@@ -202,7 +202,7 @@ def init_db():
             )"""
         )
         have = {r["name"] for r in c.execute("PRAGMA table_info(licenses)")}
-        for col in ("username", "pw_salt", "pw_hash", "agent_ip", "agent_name", "agent_token_hash"):
+        for col in ("username", "pw_salt", "pw_hash", "agent_ip", "agent_name", "agent_token_hash", "wake_bridge_token_hash"):
             if col not in have:
                 c.execute(f"ALTER TABLE licenses ADD COLUMN {col} TEXT")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_license_username ON licenses(username)")
@@ -328,7 +328,7 @@ def reset(code, what="all"):
     if what in ("agent", "all"):
         sets += ["agent_hash=NULL", "agent_ip=NULL", "agent_name=NULL", "agent_token_hash=NULL"]
     if what in ("phone", "all"):
-        sets += ["phone_token_hash=NULL", "pin_salt=NULL", "pin_hash=NULL", "phone_binds=0"]
+        sets += ["phone_token_hash=NULL", "pin_salt=NULL", "pin_hash=NULL", "phone_binds=0", "wake_bridge_token_hash=NULL"]
     if not sets:
         return False
     with db() as c:
@@ -378,6 +378,30 @@ def bind_phone(code, token, pin):
 def check_token(row, token):
     h = row.get("phone_token_hash")
     return bool(h) and hmac.compare_digest(hash_token(token), h)
+
+
+
+def set_wake_bridge_token(code, token):
+    """Store only the hash of the per-account Wake Bridge bearer token."""
+    with db() as c:
+        cur = c.execute(
+            "UPDATE licenses SET wake_bridge_token_hash=? WHERE code=?",
+            (hash_token(token), code),
+        )
+        return cur.rowcount > 0
+
+
+def get_by_wake_bridge_token(token):
+    """Resolve a Wake Bridge bearer token without storing or comparing plaintext."""
+    if not token:
+        return None
+    token_hash = hash_token(str(token))
+    with db() as c:
+        row = c.execute(
+            "SELECT * FROM licenses WHERE wake_bridge_token_hash=?",
+            (token_hash,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def check_pin(row, pin):
