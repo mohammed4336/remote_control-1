@@ -33,7 +33,7 @@ try:
 except Exception:
     pystray = None
 
-APP_VERSION = "1.2.7"
+APP_VERSION = "1.2.8"
 
 
 # =========================================================
@@ -56,6 +56,31 @@ BASE_DIR = (
 
 CONFIG_PATH = os.path.join(BASE_DIR, "agent_config.json")
 LOG_PATH = os.path.join(BASE_DIR, "agent.log")
+
+
+_LOG_HANDLE = None
+
+
+def setup_file_logging():
+    """Keep Agent output in a file; the optional CMD window only views this log."""
+    global LOG_PATH, _LOG_HANDLE
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        _LOG_HANDLE = open(LOG_PATH, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        fallback = os.path.join(
+            os.environ.get("LOCALAPPDATA", BASE_DIR),
+            "RemoteControlAgent",
+            "agent.log"
+        )
+        os.makedirs(os.path.dirname(fallback), exist_ok=True)
+        LOG_PATH = fallback
+        _LOG_HANDLE = open(LOG_PATH, "a", encoding="utf-8", buffering=1)
+    sys.stdout = _LOG_HANDLE
+    sys.stderr = _LOG_HANDLE
+
 
 DEFAULT_RELAY = "https://remote-control-by-akira.onrender.com"
 
@@ -1362,72 +1387,29 @@ def show_qr_window(code, ttl, pair_url):
     threading.Thread(target=display, daemon=True, name="PairingQR").start()
 
 
-def get_agent_console_hwnd():
-    if os.name != "nt":
-        return 0
-    try:
-        return ctypes.windll.kernel32.GetConsoleWindow()
-    except Exception:
-        return 0
-
-
-_console_wndproc_callback = None
-_console_original_wndproc = None
-
-
-def protect_console_close_button(hwnd):
-    """Turn the console X button into hide-window; keep Agent alive."""
-    global _console_wndproc_callback, _console_original_wndproc
-    if not hwnd or _console_wndproc_callback is not None:
-        return
-    try:
-        user32 = ctypes.windll.user32
-        WNDPROC = ctypes.WINFUNCTYPE(
-            ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
-            wintypes.WPARAM, wintypes.LPARAM
-        )
-        user32.CallWindowProcW.argtypes = [
-            ctypes.c_void_p, wintypes.HWND, wintypes.UINT,
-            wintypes.WPARAM, wintypes.LPARAM
-        ]
-        user32.CallWindowProcW.restype = ctypes.c_ssize_t
-        set_proc = user32.SetWindowLongPtrW
-        set_proc.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
-        set_proc.restype = ctypes.c_void_p
-        GWL_WNDPROC = -4
-        WM_CLOSE = 0x0010
-
-        def agent_console_proc(window, message, wparam, lparam):
-            if message == WM_CLOSE:
-                user32.ShowWindow(window, 0)  # close = hide, not terminate
-                return 0
-            return user32.CallWindowProcW(
-                _console_original_wndproc, window, message, wparam, lparam
-            )
-
-        _console_wndproc_callback = WNDPROC(agent_console_proc)
-        _console_original_wndproc = set_proc(
-            hwnd, GWL_WNDPROC,
-            ctypes.cast(_console_wndproc_callback, ctypes.c_void_p)
-        )
-        if not _console_original_wndproc:
-            _console_wndproc_callback = None
-            raise ctypes.WinError()
-    except Exception as exc:
-        print("[TRAY] Could not install close-to-hide handler:", exc, flush=True)
-
-
-def hide_console_window():
-    """Hide the Agent console without stopping its background process."""
+def open_log_console():
+    """Open a separate CMD log viewer; closing it never affects the Agent."""
     if os.name != "nt":
         return
     try:
-        hwnd = get_agent_console_hwnd()
-        if hwnd:
-            protect_console_close_button(hwnd)
-            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        if not os.path.exists(LOG_PATH):
+            with open(LOG_PATH, "a", encoding="utf-8"):
+                pass
+        ps_path = LOG_PATH.replace("'", "''")
+        command = (
+            "title Remote Control Agent - Live Log & "
+            "powershell.exe -NoLogo -NoProfile -Command "
+            '"Get-Content -LiteralPath ' + "'" + ps_path + "'" + ' -Tail 100 -Wait"'
+        )
+        subprocess.Popen(
+            ["cmd.exe", "/k", command],
+            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0x10),
+            close_fds=True
+        )
     except Exception as exc:
-        print("[TRAY] Could not hide console window:", exc, flush=True)
+        print("[TRAY] Could not open log window:", exc, flush=True)
+
 
 
 def start_tray():
@@ -1448,25 +1430,7 @@ def start_tray():
         return image
 
     def show_agent_window(icon, item):
-        """Show the Agent process's own console window; do not launch another CMD."""
-        try:
-            hwnd = get_agent_console_hwnd()
-            if hwnd:
-                protect_console_close_button(hwnd)
-                ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
-                ctypes.windll.user32.SetForegroundWindow(hwnd)
-            else:
-                print("[TRAY] Agent console handle is unavailable.", flush=True)
-        except Exception as exc:
-            print("[TRAY] Could not show Agent window:", exc, flush=True)
-
-    def hide_agent_window(icon, item):
-        try:
-            hwnd = get_agent_console_hwnd()
-            if hwnd:
-                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
-        except Exception as exc:
-            print("[TRAY] Could not hide Agent window:", exc, flush=True)
+        open_log_console()
 
     def open_site(icon, item):
         webbrowser.open(DEFAULT_RELAY)
@@ -1478,8 +1442,7 @@ def start_tray():
             os._exit(0)
 
     menu = pystray.Menu(
-        pystray.MenuItem("عرض نافذة Agent", show_agent_window, default=True),
-        pystray.MenuItem("إخفاء نافذة Agent", hide_agent_window),
+        pystray.MenuItem("عرض سجل Agent في CMD", show_agent_window, default=True),
         pystray.MenuItem("فتح لوحة التحكم", open_site),
         pystray.MenuItem("إنهاء التشغيل", exit_agent)
     )
@@ -1505,11 +1468,14 @@ def _signal_update_startup():
 
 def main():
 
+    setup_file_logging()
     _signal_update_startup()
     start_auto_updater(APP_VERSION)
     register_startup()
     start_tray()
-    hide_console_window()
+    # Manual launch opens a disposable CMD log viewer. Windows startup stays silent.
+    if "--background" not in sys.argv:
+        open_log_console()
     cfg = load_config()
 
     relay = (
