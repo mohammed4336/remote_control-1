@@ -798,7 +798,7 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
     <span id="netStats" style="font-size:11px;color:var(--muted);margin-inline-start:auto">الاتصال: —</span>
   </div>
   <div id="qualityPanel" class="glass" style="display:none;padding:10px;border-radius:13px;gap:8px;align-items:center;flex-wrap:wrap">
-    <label style="font-size:12px">الجودة <select id="qualityLevel"><option value="low">اقتصادي</option><option value="medium" selected>متوازن</option><option value="high">عالٍ</option></select></label>
+    <label style="font-size:12px">الجودة <select id="qualityLevel"><option value="low" selected>اقتصادي</option><option value="medium">متوازن</option><option value="high">عالٍ</option></select></label>
     <label style="font-size:12px">FPS <select id="fpsLevel"><option>10</option><option>20</option><option selected>30</option><option>60</option></select></label>
     <button class="icon-btn" id="applyQuality" type="button">تطبيق</button>
   </div>
@@ -1240,7 +1240,7 @@ async function startWebRTCStream(){
       sdp_type:rtcPeer.localDescription.type,
       monitor:selectedMonitorIndex,
       fps:Number($('fpsLevel').value)||30,
-      width:({low:960,medium:1280,high:1600})[$('qualityLevel').value]||1280,
+      width:({low:960,medium:1120,high:1440})[$('qualityLevel').value]||960,
       ice_servers:pendingIceConfig
     });
     webrtcAnswerTimer=setTimeout(()=>{
