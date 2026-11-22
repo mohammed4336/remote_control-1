@@ -13,6 +13,8 @@ import platform
 import os
 import sys
 import subprocess
+import threading
+import webbrowser
 import uuid
 from ctypes import wintypes
 
@@ -25,6 +27,11 @@ import numpy as np
 
 from PIL import Image, ImageDraw, ImageGrab
 from updater import start_auto_updater
+
+try:
+    import pystray
+except Exception:
+    pystray = None
 
 APP_VERSION = "1.2.0"
 
@@ -809,29 +816,11 @@ def save_config(cfg):
 # =========================================================
 
 def show_pair_code(code, ttl, pair_url=""):
-    """Display a one-time QR link plus the existing manual fallback."""
+    """Display a one-time QR link in a GUI dialog while the Agent stays in the tray."""
     pretty = f"{code[:4]} - {code[4:]}"
-
-    print()
-    print("=" * 58)
-    print("   SCAN TO LINK THIS COMPUTER")
-    print("=" * 58)
     if pair_url:
-        try:
-            import qrcode
-            qr = qrcode.QRCode(border=2, box_size=1)
-            qr.add_data(pair_url)
-            qr.make(fit=True)
-            qr.print_ascii(out=sys.stdout, tty=False)
-            print("   Scan with your phone camera; sign in if asked.")
-        except Exception as exc:
-            print("   QR display unavailable:", exc)
-            print("   Open this link on your phone:", pair_url)
-    print()
-    print(f"   Manual fallback code: {pretty}")
-    print(f"   Valid for {ttl // 60} minutes; it refreshes automatically.")
-    print("=" * 58)
-    print()
+        show_qr_window(code, ttl, pair_url)
+    print(f"[PAIR] Manual fallback code: {pretty}", flush=True)
 
 
 # =========================================================
@@ -1304,6 +1293,109 @@ async def run(
         await asyncio.sleep(wait)
 
 
+
+# =========================================================
+# WINDOWS BACKGROUND / SYSTEM TRAY
+# =========================================================
+
+TRAY_ICON = None
+QR_WINDOW_LOCK = threading.Lock()
+
+
+def register_startup():
+    """Start this installed Agent automatically when the current Windows user signs in."""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            winreg.KEY_SET_VALUE
+        )
+        winreg.SetValueEx(key, "RemoteControlAgent", 0, winreg.REG_SZ,
+                          '"' + sys.executable + '" --background')
+        winreg.CloseKey(key)
+    except Exception as exc:
+        print("[TRAY] Could not register Windows startup:", exc, flush=True)
+
+
+def show_qr_window(code, ttl, pair_url):
+    """Show pairing QR in a small GUI window (the Agent itself runs without a console)."""
+    def display():
+        try:
+            import tkinter as tk
+            from tkinter import ttk
+            import qrcode
+
+            root = tk.Tk()
+            root.title("Remote Control - Link this computer")
+            root.resizable(False, False)
+            root.attributes("-topmost", True)
+            frame = ttk.Frame(root, padding=18)
+            frame.pack()
+            ttk.Label(frame, text="امسح الرمز بالجوال لربط الكمبيوتر",
+                      font=("Segoe UI", 12, "bold")).pack(pady=(0, 10))
+
+            qr = qrcode.QRCode(box_size=7, border=2)
+            qr.add_data(pair_url)
+            qr.make(fit=True)
+            qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+            from PIL import ImageTk
+            photo = ImageTk.PhotoImage(qr_image)
+            image_label = ttk.Label(frame, image=photo)
+            image_label.image = photo
+            image_label.pack()
+
+            ttk.Label(frame, text=f"رمز احتياطي: {code[:4]} - {code[4:]}",
+                      font=("Segoe UI", 10)).pack(pady=(10, 2))
+            ttk.Label(frame, text=f"صالح لمدة {max(1, ttl // 60)} دقيقة").pack()
+            ttk.Label(frame, text="بعد الربط يمكنك إغلاق هذه النافذة؛ سيبقى البرنامج بالخلفية.",
+                      wraplength=330).pack(pady=(8, 0))
+            ttk.Button(frame, text="إخفاء", command=root.destroy).pack(pady=(12, 0))
+            root.mainloop()
+        except Exception as exc:
+            print("[TRAY] QR window error:", exc, flush=True)
+
+    threading.Thread(target=display, daemon=True, name="PairingQR").start()
+
+
+def start_tray():
+    """Create a notification-area icon with show-site and exit actions."""
+    global TRAY_ICON
+    if os.name != "nt" or pystray is None:
+        return
+
+    def make_image():
+        from PIL import Image, ImageDraw
+        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((5, 5, 59, 59), fill=(20, 145, 105, 255))
+        draw.rounded_rectangle((17, 18, 47, 44), radius=5,
+                               fill=(255, 255, 255, 255))
+        draw.rectangle((22, 24, 42, 38), fill=(20, 145, 105, 255))
+        draw.line((24, 31, 40, 31), fill=(255, 255, 255, 255), width=2)
+        return image
+
+    def open_site(icon, item):
+        webbrowser.open(DEFAULT_RELAY)
+
+    def exit_agent(icon, item):
+        try:
+            icon.stop()
+        finally:
+            os._exit(0)
+
+    menu = pystray.Menu(
+        pystray.MenuItem("فتح لوحة التحكم", open_site, default=True),
+        pystray.MenuItem("إنهاء التشغيل", exit_agent)
+    )
+    TRAY_ICON = pystray.Icon("RemoteControlAgent", make_image(),
+                             "Remote Control Agent - يعمل بالخلفية", menu)
+    threading.Thread(target=TRAY_ICON.run, daemon=True, name="AgentTray").start()
+
+
 # =========================================================
 # MAIN
 # =========================================================
@@ -1323,6 +1415,8 @@ def main():
 
     _signal_update_startup()
     start_auto_updater(APP_VERSION)
+    register_startup()
+    start_tray()
     cfg = load_config()
 
     relay = (
@@ -1378,7 +1472,9 @@ def main():
     except KeyboardInterrupt:
         pass
 
-    input("\nPress Enter to close...")
+    # In packaged mode, the tray menu owns the Agent lifetime.
+    if not getattr(sys, "frozen", False):
+        input("\nPress Enter to close...")
 
 
 if __name__ == "__main__":
