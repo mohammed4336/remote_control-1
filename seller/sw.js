@@ -1,4 +1,4 @@
-const CACHE = "remote-control-v4";
+const CACHE = "remote-control-v5";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
