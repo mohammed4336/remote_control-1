@@ -32,7 +32,7 @@ class DesktopVideoTrack(VideoStreamTrack):
         super().__init__()
         self.monitor_index = max(0, int(monitor_index))
         self.fps = max(5, min(60, int(fps)))
-        self.width = max(640, min(1920, int(width)))
+        self.width = max(640, min(1600, int(width)))
         self.monitor_rect = monitor_rect
         self.camera = None
         self._dxcam = False
