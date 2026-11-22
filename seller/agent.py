@@ -33,7 +33,7 @@ try:
 except Exception:
     pystray = None
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 
 # =========================================================
@@ -1361,6 +1361,18 @@ def show_qr_window(code, ttl, pair_url):
     threading.Thread(target=display, daemon=True, name="PairingQR").start()
 
 
+def hide_console_window():
+    """Keep the console subsystem available for Python stdout while hiding its window."""
+    if os.name != "nt":
+        return
+    try:
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+    except Exception as exc:
+        print("[TRAY] Could not hide console window:", exc, flush=True)
+
+
 def start_tray():
     """Create a notification-area icon with show-site and exit actions."""
     global TRAY_ICON
@@ -1417,6 +1429,7 @@ def main():
     start_auto_updater(APP_VERSION)
     register_startup()
     start_tray()
+    hide_console_window()
     cfg = load_config()
 
     relay = (
