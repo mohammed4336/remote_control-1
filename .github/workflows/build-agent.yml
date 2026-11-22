@@ -1,5 +1,5 @@
 name: Build and Publish Agent
-# Release build trigger: v1.2.1
+# Release build trigger: v1.2.1 [release]
 on:
   push:
     branches:
