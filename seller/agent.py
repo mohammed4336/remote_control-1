@@ -33,7 +33,7 @@ try:
 except Exception:
     pystray = None
 
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 
 
 # =========================================================
@@ -1362,13 +1362,42 @@ def show_qr_window(code, ttl, pair_url):
     threading.Thread(target=display, daemon=True, name="PairingQR").start()
 
 
+def get_agent_console_hwnd():
+    if os.name != "nt":
+        return 0
+    try:
+        return ctypes.windll.kernel32.GetConsoleWindow()
+    except Exception:
+        return 0
+
+
+def protect_console_close_button(hwnd):
+    """Prevent the console X button from terminating the background Agent."""
+    if not hwnd:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetSystemMenu.argtypes = [wintypes.HWND, wintypes.BOOL]
+        user32.GetSystemMenu.restype = wintypes.HMENU
+        menu = user32.GetSystemMenu(hwnd, False)
+        if menu:
+            SC_CLOSE = 0xF060
+            MF_BYCOMMAND = 0x00000000
+            MF_GRAYED = 0x00000001
+            user32.EnableMenuItem(menu, SC_CLOSE, MF_BYCOMMAND | MF_GRAYED)
+            user32.DrawMenuBar(hwnd)
+    except Exception as exc:
+        print("[TRAY] Could not protect console close button:", exc, flush=True)
+
+
 def hide_console_window():
-    """Keep the console subsystem available for Python stdout while hiding its window."""
+    """Hide the Agent console without stopping its background process."""
     if os.name != "nt":
         return
     try:
-        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        hwnd = get_agent_console_hwnd()
         if hwnd:
+            protect_console_close_button(hwnd)
             ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
     except Exception as exc:
         print("[TRAY] Could not hide console window:", exc, flush=True)
@@ -1394,14 +1423,23 @@ def start_tray():
     def show_agent_window(icon, item):
         """Show the Agent process's own console window; do not launch another CMD."""
         try:
-            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            hwnd = get_agent_console_hwnd()
             if hwnd:
+                protect_console_close_button(hwnd)
                 ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
                 ctypes.windll.user32.SetForegroundWindow(hwnd)
             else:
                 print("[TRAY] Agent console handle is unavailable.", flush=True)
         except Exception as exc:
             print("[TRAY] Could not show Agent window:", exc, flush=True)
+
+    def hide_agent_window(icon, item):
+        try:
+            hwnd = get_agent_console_hwnd()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        except Exception as exc:
+            print("[TRAY] Could not hide Agent window:", exc, flush=True)
 
     def open_site(icon, item):
         webbrowser.open(DEFAULT_RELAY)
@@ -1414,6 +1452,7 @@ def start_tray():
 
     menu = pystray.Menu(
         pystray.MenuItem("عرض نافذة Agent", show_agent_window, default=True),
+        pystray.MenuItem("إخفاء نافذة Agent", hide_agent_window),
         pystray.MenuItem("فتح لوحة التحكم", open_site),
         pystray.MenuItem("إنهاء التشغيل", exit_agent)
     )
