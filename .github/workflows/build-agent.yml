@@ -32,7 +32,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller aiohttp pyautogui Pillow soundcard numpy aiortc dxcam
+          python -m pip install pyinstaller aiohttp pyautogui Pillow soundcard numpy aiortc dxcam qrcode
           python -m pip check
       - name: Verify source syntax, dependencies and release version
         shell: pwsh
@@ -40,7 +40,7 @@ jobs:
           RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           python -m compileall -q seller
-          python -c "import sys; sys.path.insert(0, 'seller'); import sys; sys.path.insert(0, 'seller'); import webrtc_stream; import aiohttp, pyautogui, soundcard, numpy, aiortc; from PIL import Image, ImageDraw, ImageGrab; import updater; print('ALL DEPENDENCIES AND WEBRTC MODULES OK')"
+          python -c "import sys; sys.path.insert(0, 'seller'); import sys; sys.path.insert(0, 'seller'); import webrtc_stream; import aiohttp, pyautogui, soundcard, numpy, aiortc, qrcode; from PIL import Image, ImageDraw, ImageGrab; import updater; print('ALL DEPENDENCIES AND WEBRTC MODULES OK')"
           $agent = Get-Content -Raw "seller/agent.py"
           $match = [regex]::Match($agent, 'APP_VERSION\s*=\s*["'']([^"'']+)["'']')
           if (-not $match.Success) { throw "APP_VERSION was not found in seller/agent.py" }
