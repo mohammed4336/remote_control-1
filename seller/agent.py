@@ -33,7 +33,7 @@ try:
 except Exception:
     pystray = None
 
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 
 
 # =========================================================
@@ -1391,23 +1391,17 @@ def start_tray():
         draw.line((24, 31, 40, 31), fill=(255, 255, 255, 255), width=2)
         return image
 
-    def show_cmd(icon, item):
-        """Open a separate CMD window that follows the Agent's live log."""
+    def show_agent_window(icon, item):
+        """Show the Agent process's own console window; do not launch another CMD."""
         try:
-            # The Agent's own console is hidden, so show the redirected log in a
-            # fresh CMD window instead of trying to unhide a hidden console.
-            command = (
-                'powershell.exe -NoProfile -Command '
-                '"Get-Content -LiteralPath \''
-                + LOG_PATH.replace("'", "''")
-                + '\' -Wait"'
-            )
-            subprocess.Popen(
-                ["cmd.exe", "/k", command],
-                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-            )
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+            else:
+                print("[TRAY] Agent console handle is unavailable.", flush=True)
         except Exception as exc:
-            print("[TRAY] Could not open CMD:", exc, flush=True)
+            print("[TRAY] Could not show Agent window:", exc, flush=True)
 
     def open_site(icon, item):
         webbrowser.open(DEFAULT_RELAY)
@@ -1419,7 +1413,7 @@ def start_tray():
             os._exit(0)
 
     menu = pystray.Menu(
-        pystray.MenuItem("فتح CMD", show_cmd, default=True),
+        pystray.MenuItem("عرض نافذة Agent", show_agent_window, default=True),
         pystray.MenuItem("فتح لوحة التحكم", open_site),
         pystray.MenuItem("إنهاء التشغيل", exit_agent)
     )
@@ -1444,15 +1438,6 @@ def _signal_update_startup():
 
 
 def main():
-
-    # Keep a live log file so the tray's "فتح CMD" action can display output
-    # even though the packaged Agent runs with its original console hidden.
-    try:
-        log_stream = open(LOG_PATH, "a", encoding="utf-8", buffering=1)
-        sys.stdout = log_stream
-        sys.stderr = log_stream
-    except Exception:
-        pass
 
     _signal_update_startup()
     start_auto_updater(APP_VERSION)
