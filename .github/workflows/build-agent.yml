@@ -1,5 +1,5 @@
 name: Build and Publish Agent
-# Release build trigger: v1.2.0
+# Release build trigger: v1.2.1
 on:
   push:
     branches:
@@ -12,7 +12,7 @@ on:
       version:
         description: "Release version (must match APP_VERSION in seller/agent.py)"
         required: true
-        default: "1.2.0"
+        default: "1.2.1"
 permissions:
   contents: write
 jobs:
@@ -20,7 +20,7 @@ jobs:
     if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release]') }}
     runs-on: windows-latest
     env:
-      RELEASE_VERSION: ${{ inputs.version || '1.2.0' }}
+      RELEASE_VERSION: ${{ inputs.version || '1.2.1' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,7 +32,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller aiohttp pyautogui Pillow soundcard numpy aiortc dxcam qrcode
+          python -m pip install pyinstaller aiohttp pyautogui Pillow soundcard numpy aiortc dxcam qrcode pystray
           python -m pip check
       - name: Verify source syntax, dependencies and release version
         shell: pwsh
@@ -40,7 +40,7 @@ jobs:
           RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           python -m compileall -q seller
-          python -c "import sys; sys.path.insert(0, 'seller'); import sys; sys.path.insert(0, 'seller'); import webrtc_stream; import aiohttp, pyautogui, soundcard, numpy, aiortc, qrcode; from PIL import Image, ImageDraw, ImageGrab; import updater; print('ALL DEPENDENCIES AND WEBRTC MODULES OK')"
+          python -c "import sys; sys.path.insert(0, 'seller'); import sys; sys.path.insert(0, 'seller'); import webrtc_stream; import aiohttp, pyautogui, soundcard, numpy, aiortc, qrcode, pystray; from PIL import Image, ImageDraw, ImageGrab; import updater; print('ALL DEPENDENCIES AND WEBRTC MODULES OK')"
           $agent = Get-Content -Raw "seller/agent.py"
           $match = [regex]::Match($agent, 'APP_VERSION\s*=\s*["'']([^"'']+)["'']')
           if (-not $match.Success) { throw "APP_VERSION was not found in seller/agent.py" }
@@ -67,7 +67,7 @@ jobs:
       - name: Build EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --clean --noconfirm --onefile --console --name agent --paths seller --collect-all aiohttp --collect-all pyautogui --collect-all PIL --collect-all soundcard --collect-all numpy --collect-all aiortc --collect-all av --collect-all dxcam --hidden-import=soundcard.mediafoundation --hidden-import=updater seller/agent.py
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name agent --paths seller --collect-all aiohttp --collect-all pyautogui --collect-all PIL --collect-all soundcard --collect-all numpy --collect-all aiortc --collect-all av --collect-all dxcam --hidden-import=soundcard.mediafoundation --hidden-import=pystray --hidden-import=pystray._win32 --hidden-import=updater seller/agent.py
           python -m PyInstaller --clean --noconfirm --onefile --console --name wake-bridge --paths seller seller/wake_bridge.py
       - name: Verify EXE and create update manifest
         shell: pwsh
