@@ -33,7 +33,7 @@ try:
 except Exception:
     pystray = None
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 
 # =========================================================
