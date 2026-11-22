@@ -808,27 +808,29 @@ def save_config(cfg):
 # PAIRING
 # =========================================================
 
-def show_pair_code(code, ttl):
-
+def show_pair_code(code, ttl, pair_url=""):
+    """Display a one-time QR link plus the existing manual fallback."""
     pretty = f"{code[:4]} - {code[4:]}"
 
     print()
-    print("=" * 50)
-    print(f"   PAIRING CODE:   {pretty}")
-    print("=" * 50)
-
-    print(
-        "   1) Open the website on your phone and log in"
-    )
-
-    print(
-        '   2) Tap "Link new computer" and type this code'
-    )
-
-    print(
-        f"   (valid {ttl // 60} minutes - a new code appears automatically)"
-    )
-
+    print("=" * 58)
+    print("   SCAN TO LINK THIS COMPUTER")
+    print("=" * 58)
+    if pair_url:
+        try:
+            import qrcode
+            qr = qrcode.QRCode(border=2, box_size=1)
+            qr.add_data(pair_url)
+            qr.make(fit=True)
+            qr.print_ascii(out=sys.stdout, tty=False)
+            print("   Scan with your phone camera; sign in if asked.")
+        except Exception as exc:
+            print("   QR display unavailable:", exc)
+            print("   Open this link on your phone:", pair_url)
+    print()
+    print(f"   Manual fallback code: {pretty}")
+    print(f"   Valid for {ttl // 60} minutes; it refreshes automatically.")
+    print("=" * 58)
     print()
 
 
@@ -1070,9 +1072,15 @@ async def run(
                                     wait = 30
                                     break
 
+                                pair_origin = relay_addr.strip().rstrip("/")
+                                pair_origin = pair_origin.replace("wss://", "https://", 1).replace("ws://", "http://", 1)
+                                if not pair_origin.startswith(("https://", "http://")):
+                                    pair_origin = "https://" + pair_origin
+                                pair_url = f"{pair_origin}/?pair={code}"
                                 show_pair_code(
                                     code,
-                                    int(msg.get("ttl", 600))
+                                    int(msg.get("ttl", 600)),
+                                    pair_url
                                 )
 
                                 if refresh_task:

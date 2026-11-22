@@ -1334,6 +1334,14 @@ let signupContact = '';
 let setupToken = '';
 let currentStep = 'stepLogin';
 let pcOnline = false;
+const pairParam = new URLSearchParams(location.search).get('pair') || '';
+let pendingPairCode = /^\d{8}$/.test(pairParam) ? pairParam : '';
+let connectAfterPair = false;
+if (pairParam) {
+  const cleanUrl = new URL(location.href);
+  cleanUrl.searchParams.delete('pair');
+  history.replaceState(null, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+}
 
 const $ = id=>document.getElementById(id);
 
@@ -1524,8 +1532,13 @@ function onMessage(ev){
     setInfo('');
     noResume = false;
 
-    if(resuming && !autoLogin){
-      send({type:'connect_pc'});
+    if(pendingPairCode){
+      resuming = false;
+      autoLogin = false;
+      showStep('stepPc');
+      $('pairCode').value = pendingPairCode.slice(0,4) + '-' + pendingPairCode.slice(4);
+      setBusy($('pairBtn'),true);
+      send({type:'pair_confirm',code:pendingPairCode});
       return;
     }
 
@@ -1534,6 +1547,12 @@ function onMessage(ev){
 
     showStep('stepPc');
     renderPc(msg.pc);
+
+    // A saved phone session should reconnect to its already-paired PC automatically.
+    if(msg.pc && msg.pc.online){
+      send({type:'connect_pc'});
+      return;
+    }
 
   }else if((t==='signup_result' || t==='login_result') && !ok){
     if(resuming){
@@ -1553,12 +1572,18 @@ function onMessage(ev){
 
   }else if(t==='pair_result'){
     setBusy($('pairBtn'),false);
+    if(pendingPairCode){
+      pendingPairCode = '';
+      $('pairCode').value = '';
+    }
 
     if(ok){
       $('pairCode').value = '';
       setErr('');
+      connectAfterPair = true;
+      send({type:'pc_status'});
       showToast('تم ربط الكمبيوتر ✅');
-      setInfo('تم ربط '+(msg.name||'الكمبيوتر')+' بحسابك. ثواني ويظهر متصل.');
+      setInfo('تم ربط '+(msg.name||'الكمبيوتر')+' بحسابك نهائيًا. لن تحتاج إعادة الربط.');
       setTimeout(()=>setInfo(''),6000);
     }else{
       setErr(failText(msg));
@@ -1566,6 +1591,10 @@ function onMessage(ev){
 
   }else if(t==='pc_status'){
     renderPc(msg);
+    if(connectAfterPair && msg.online){
+      connectAfterPair = false;
+      go('connectPcBtn',{type:'connect_pc'});
+    }
 
   }else if(t==='auth_result'){
     setBusy($('connectPcBtn'),false);
@@ -1618,6 +1647,7 @@ function onMessage(ev){
       requestMonitors();
     }else{
       renderPc({online:true,name:msg.name||$('pcName').textContent});
+      if(connectAfterPair && currentStep==='stepPc') send({type:'pc_status'});
     }
 
   }else if(t==='wake_bridge_token'){
