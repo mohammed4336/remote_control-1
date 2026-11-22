@@ -33,7 +33,7 @@ try:
 except Exception:
     pystray = None
 
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.2.7"
 
 
 # =========================================================
@@ -1371,23 +1371,50 @@ def get_agent_console_hwnd():
         return 0
 
 
+_console_wndproc_callback = None
+_console_original_wndproc = None
+
+
 def protect_console_close_button(hwnd):
-    """Prevent the console X button from terminating the background Agent."""
-    if not hwnd:
+    """Turn the console X button into hide-window; keep Agent alive."""
+    global _console_wndproc_callback, _console_original_wndproc
+    if not hwnd or _console_wndproc_callback is not None:
         return
     try:
         user32 = ctypes.windll.user32
-        user32.GetSystemMenu.argtypes = [wintypes.HWND, wintypes.BOOL]
-        user32.GetSystemMenu.restype = wintypes.HMENU
-        menu = user32.GetSystemMenu(hwnd, False)
-        if menu:
-            SC_CLOSE = 0xF060
-            MF_BYCOMMAND = 0x00000000
-            MF_GRAYED = 0x00000001
-            user32.EnableMenuItem(menu, SC_CLOSE, MF_BYCOMMAND | MF_GRAYED)
-            user32.DrawMenuBar(hwnd)
+        WNDPROC = ctypes.WINFUNCTYPE(
+            ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
+            wintypes.WPARAM, wintypes.LPARAM
+        )
+        user32.CallWindowProcW.argtypes = [
+            ctypes.c_void_p, wintypes.HWND, wintypes.UINT,
+            wintypes.WPARAM, wintypes.LPARAM
+        ]
+        user32.CallWindowProcW.restype = ctypes.c_ssize_t
+        set_proc = user32.SetWindowLongPtrW
+        set_proc.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+        set_proc.restype = ctypes.c_void_p
+        GWL_WNDPROC = -4
+        WM_CLOSE = 0x0010
+
+        def agent_console_proc(window, message, wparam, lparam):
+            if message == WM_CLOSE:
+                user32.ShowWindow(window, 0)  # close = hide, not terminate
+                return 0
+            return user32.CallWindowProcW(
+                _console_original_wndproc, window, message, wparam, lparam
+            )
+
+        _console_wndproc_callback = WNDPROC(agent_console_proc)
+        _console_original_wndproc = set_proc(
+            hwnd, GWL_WNDPROC,
+            ctypes.cast(_console_wndproc_callback, ctypes.c_void_p)
+        )
+        if not _console_original_wndproc:
+            _console_wndproc_callback = None
+            raise ctypes.WinError()
     except Exception as exc:
-        print("[TRAY] Could not protect console close button:", exc, flush=True)
+        print("[TRAY] Could not install close-to-hide handler:", exc, flush=True)
 
 
 def hide_console_window():
