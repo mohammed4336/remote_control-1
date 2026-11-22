@@ -1,5 +1,5 @@
 name: Build and Publish Agent
-# Release build trigger: v1.2.1 [release]
+# Release build trigger: v1.2.2 [release]
 on:
   push:
     branches:
@@ -12,7 +12,7 @@ on:
       version:
         description: "Release version (must match APP_VERSION in seller/agent.py)"
         required: true
-        default: "1.2.1"
+        default: "1.2.2"
 permissions:
   contents: write
 jobs:
@@ -20,7 +20,7 @@ jobs:
     if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release]') }}
     runs-on: windows-latest
     env:
-      RELEASE_VERSION: ${{ inputs.version || '1.2.1' }}
+      RELEASE_VERSION: ${{ inputs.version || '1.2.2' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -67,7 +67,7 @@ jobs:
       - name: Build EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --clean --noconfirm --onefile --windowed --name agent --paths seller --collect-all aiohttp --collect-all pyautogui --collect-all PIL --collect-all soundcard --collect-all numpy --collect-all aiortc --collect-all av --collect-all dxcam --hidden-import=soundcard.mediafoundation --hidden-import=pystray --hidden-import=pystray._win32 --hidden-import=updater seller/agent.py
+          python -m PyInstaller --clean --noconfirm --onefile --console --name agent --paths seller --collect-all aiohttp --collect-all pyautogui --collect-all PIL --collect-all soundcard --collect-all numpy --collect-all aiortc --collect-all av --collect-all dxcam --hidden-import=soundcard.mediafoundation --hidden-import=pystray --hidden-import=pystray._win32 --hidden-import=updater seller/agent.py
           python -m PyInstaller --clean --noconfirm --onefile --console --name wake-bridge --paths seller seller/wake_bridge.py
       - name: Verify EXE and create update manifest
         shell: pwsh
