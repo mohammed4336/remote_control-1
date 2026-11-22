@@ -1334,6 +1334,13 @@ let signupContact = '';
 let setupToken = '';
 let currentStep = 'stepLogin';
 let pcOnline = false;
+const pairParam = new URLSearchParams(location.search).get('pair') || '';
+let pendingPairCode = /^\d{8}$/.test(pairParam) ? pairParam : '';
+if (pairParam) {
+  const cleanUrl = new URL(location.href);
+  cleanUrl.searchParams.delete('pair');
+  history.replaceState(null, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+}
 
 const $ = id=>document.getElementById(id);
 
@@ -1524,6 +1531,16 @@ function onMessage(ev){
     setInfo('');
     noResume = false;
 
+    if(pendingPairCode){
+      resuming = false;
+      autoLogin = false;
+      showStep('stepPc');
+      $('pairCode').value = pendingPairCode.slice(0,4) + '-' + pendingPairCode.slice(4);
+      setBusy($('pairBtn'),true);
+      send({type:'pair_confirm',code:pendingPairCode});
+      return;
+    }
+
     if(resuming && !autoLogin){
       send({type:'connect_pc'});
       return;
@@ -1553,6 +1570,10 @@ function onMessage(ev){
 
   }else if(t==='pair_result'){
     setBusy($('pairBtn'),false);
+    if(pendingPairCode){
+      pendingPairCode = '';
+      $('pairCode').value = '';
+    }
 
     if(ok){
       $('pairCode').value = '';
