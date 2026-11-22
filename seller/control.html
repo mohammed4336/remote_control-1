@@ -1600,8 +1600,11 @@ function onMessage(ev){
 
       setErr('');
       streaming = true;
-      send({type:'stream',on:true});
       $('streamToggleLbl').textContent = 'إيقاف البث';
+
+      // ابدأ WebRTC مباشرة بدل مسار JPEG/Base64 القديم (كان يحد البث ويزيد التأخير).
+      // إذا تعذر WebRTC، fallbackToLegacyStream يشغل وضع التوافق تلقائياً.
+      startWebRTCStream();
 
       /* طلب قائمة الشاشات بعد نجاح الاتصال */
       requestMonitors();
