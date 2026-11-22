@@ -1390,6 +1390,16 @@ def start_tray():
         draw.line((24, 31, 40, 31), fill=(255, 255, 255, 255), width=2)
         return image
 
+    def show_cmd(icon, item):
+        """Show the Agent's existing console window with its live log output."""
+        try:
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+        except Exception as exc:
+            print("[TRAY] Could not show CMD:", exc, flush=True)
+
     def open_site(icon, item):
         webbrowser.open(DEFAULT_RELAY)
 
@@ -1400,7 +1410,8 @@ def start_tray():
             os._exit(0)
 
     menu = pystray.Menu(
-        pystray.MenuItem("فتح لوحة التحكم", open_site, default=True),
+        pystray.MenuItem("فتح CMD", show_cmd, default=True),
+        pystray.MenuItem("فتح لوحة التحكم", open_site),
         pystray.MenuItem("إنهاء التشغيل", exit_agent)
     )
     TRAY_ICON = pystray.Icon("RemoteControlAgent", make_image(),
