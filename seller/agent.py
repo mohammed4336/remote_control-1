@@ -33,7 +33,7 @@ try:
 except Exception:
     pystray = None
 
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 
 # =========================================================
@@ -55,6 +55,7 @@ BASE_DIR = (
 )
 
 CONFIG_PATH = os.path.join(BASE_DIR, "agent_config.json")
+LOG_PATH = os.path.join(BASE_DIR, "agent.log")
 
 DEFAULT_RELAY = "https://remote-control-by-akira.onrender.com"
 
@@ -1391,14 +1392,22 @@ def start_tray():
         return image
 
     def show_cmd(icon, item):
-        """Show the Agent's existing console window with its live log output."""
+        """Open a separate CMD window that follows the Agent's live log."""
         try:
-            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-            if hwnd:
-                ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
-                ctypes.windll.user32.SetForegroundWindow(hwnd)
+            # The Agent's own console is hidden, so show the redirected log in a
+            # fresh CMD window instead of trying to unhide a hidden console.
+            command = (
+                'powershell.exe -NoProfile -Command '
+                '"Get-Content -LiteralPath \''
+                + LOG_PATH.replace("'", "''")
+                + '\' -Wait"'
+            )
+            subprocess.Popen(
+                ["cmd.exe", "/k", command],
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            )
         except Exception as exc:
-            print("[TRAY] Could not show CMD:", exc, flush=True)
+            print("[TRAY] Could not open CMD:", exc, flush=True)
 
     def open_site(icon, item):
         webbrowser.open(DEFAULT_RELAY)
@@ -1435,6 +1444,15 @@ def _signal_update_startup():
 
 
 def main():
+
+    # Keep a live log file so the tray's "فتح CMD" action can display output
+    # even though the packaged Agent runs with its original console hidden.
+    try:
+        log_stream = open(LOG_PATH, "a", encoding="utf-8", buffering=1)
+        sys.stdout = log_stream
+        sys.stderr = log_stream
+    except Exception:
+        pass
 
     _signal_update_startup()
     start_auto_updater(APP_VERSION)
