@@ -105,3 +105,4 @@ jobs:
           fail_on_unmatched_files: true
 
 # Release v1.1.4: hardened Agent self-update replacement and rollback.
+# v1.2.3 tray CMD release [release]
