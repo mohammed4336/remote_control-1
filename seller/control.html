@@ -899,14 +899,6 @@ p.sub{color:var(--muted);font-size:13.5px;margin:0;line-height:1.9;}
         </div>
       </div>
     </div>
-    <div style="margin:14px 0;padding:14px;border:1px solid rgba(255,255,255,.14);border-radius:14px">
-      <div style="font-weight:700;margin-bottom:8px">⚡ التشغيل الذكي للكمبيوتر</div>
-      <div style="font-size:12px;opacity:.78;margin-bottom:10px">يتعرّف الموقع على جهازك تلقائيًا ويحفظ بيانات الشبكة عند اتصال البرنامج.</div>
-      <button class="btn" id="wakePcBtn" style="width:100%;margin-top:7px">⚡ تشغيل الكمبيوتر</button>
-      <div id="wakeStatus" style="font-size:12px;line-height:1.8;margin-top:9px;opacity:.8">سيتم فحص جاهزية التشغيل تلقائيًا عند الضغط.</div>
-      <div style="font-size:11px;opacity:.65;margin-top:8px">يتطلب وسيطًا داخل الشبكة المنزلية وميزة Wake-on-LAN مفعّلة في الكمبيوتر والراوتر.</div>
-    </div>
-
     <button class="btn ghost" id="powerClose">إغلاق</button>
   </div>
 </div>
@@ -1639,20 +1631,15 @@ function onMessage(ev){
       setErr(failText(msg));
     }
   }else if(t==='wake_bridge_online'){
-    wakeStatus.textContent='وسيط التشغيل متصل داخل المنزل. يمكنك إرسال أمر التشغيل.';
     showToast('وسيط التشغيل متصل');
   }else if(t==='wake_bridge_offline'){
-    wakeStatus.textContent='وسيط التشغيل غير متصل. لن يعمل التشغيل عن بُعد حتى يتصل جهاز وسيط بالشبكة المنزلية.';
     showToast('وسيط التشغيل غير متصل');
   }else if(t==='wake_result'){
     if(msg.ok){
-      wakeStatus.textContent='تم إرسال حزمة التشغيل من داخل الشبكة. هذا لا يؤكد أن الكمبيوتر اشتغل؛ انتظر ظهوره متصلًا.';
       showToast('تم إرسال طلب التشغيل — ننتظر اتصال الكمبيوتر');
     }else if(msg.reason==='bridge_offline'){
-      wakeStatus.textContent='وسيط التشغيل غير متصل. يلزم تشغيله على جهاز يعمل داخل شبكة المنزل.';
       showToast('وسيط التشغيل غير متصل داخل المنزل');
     }else{
-      wakeStatus.textContent='تعذر إرسال الطلب: '+(msg.reason||'خطأ غير معروف');
       showToast('تعذر إرسال أمر التشغيل: '+(msg.reason||'خطأ'));
     }
   }else if(t==='monitors'){
@@ -2170,17 +2157,6 @@ document.querySelector('[data-action="power"]').addEventListener('click',()=>{
 document.getElementById('powerClose').addEventListener('click',()=>{
   document.getElementById('powerOverlay').classList.remove('show');
 });
-const wakeStatus=document.getElementById('wakeStatus');
-document.getElementById('wakePcBtn').addEventListener('click',()=>{
-  if(!ws || ws.readyState!==1){
-    wakeStatus.textContent='اتصل بالخادم أولًا ثم أعد المحاولة.';
-    showToast('الجهاز غير متصل بالخادم');return;
-  }
-  wakeStatus.textContent='جارٍ فحص بيانات الكمبيوتر ووسيط التشغيل...';
-  send({type:'wake_pc'});
-  showToast('جارٍ فحص إمكانية التشغيل...');
-});
-
 document.getElementById('streamToggleBtn').addEventListener('click',()=>{
   streaming = !streaming;
   document.getElementById('streamToggleLbl').textContent =
